@@ -313,7 +313,13 @@ const DEFAULT_WAREHOUSES: WarehousePercentage[] = [
   { name: "Воронеж", percentage: 5 },
 ];
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ??
+  (typeof window !== "undefined" &&
+  window.location.hostname === "localhost" &&
+  window.location.port === "3000"
+    ? "http://localhost:8000"
+    : "");
 const APP_NAME = "FBOly";
 const APP_TAGLINE = "Закрываем боли селлеров";
 const LOGO_SRC = "/fboly-logo.png";

@@ -1,11 +1,30 @@
 const http = require("node:http");
 const zlib = require("node:zlib");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
 const APP_VERSION = "2026-05-19-crossdock-single-dropoff-slot";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
+const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
+const STATIC_MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".webp": "image/webp",
+  ".txt": "text/plain; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
 
 const DEFAULT_WAREHOUSES = [
   { name: "Москва_Хоругвино", percentage: 50 },
@@ -443,7 +462,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "OPTIONS") {
       return send(res, 204, "", "text/plain; charset=utf-8");
     }
-    if (req.method === "GET" && req.url === "/") {
+    if (req.method === "GET" && requestUrl.pathname === "/") {
+      if (serveFrontendAsset(res, requestUrl.pathname)) return;
       return send(res, 200, html(), "text/html; charset=utf-8");
     }
     if (req.method === "GET" && req.url === "/health") {
@@ -659,6 +679,9 @@ const server = http.createServer(async (req, res) => {
         distribution_note: distributionPlan.note,
       });
     }
+    if (req.method === "GET" && !requestUrl.pathname.startsWith("/api/")) {
+      if (serveFrontendAsset(res, requestUrl.pathname)) return;
+    }
     return send(res, 404, "Not found", "text/plain; charset=utf-8");
   } catch (error) {
     return json(res, 500, { detail: error.message || "Ошибка сервера" });
@@ -668,6 +691,42 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Ozon FBO Excel portable service: http://localhost:${PORT}`);
 });
+
+function serveFrontendAsset(res, requestPathname) {
+  if (!fs.existsSync(FRONTEND_DIST_DIR)) return false;
+
+  let pathname = "/";
+  try {
+    pathname = decodeURIComponent(requestPathname || "/");
+  } catch {
+    pathname = "/";
+  }
+
+  let relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  if (relativePath.endsWith("/")) relativePath += "index.html";
+
+  const distRoot = path.resolve(FRONTEND_DIST_DIR);
+  let filePath = path.resolve(distRoot, relativePath);
+  if (!filePath.startsWith(distRoot + path.sep) && filePath !== distRoot) {
+    return false;
+  }
+
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    if (path.extname(relativePath)) return false;
+    filePath = path.join(distRoot, "index.html");
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return false;
+  }
+
+  const contentType = STATIC_MIME_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Cache-Control": filePath.includes(`${path.sep}_next${path.sep}`)
+      ? "public, max-age=31536000, immutable"
+      : "no-cache",
+  });
+  fs.createReadStream(filePath).pipe(res);
+  return true;
+}
 
 function send(res, status, body, contentType) {
   res.writeHead(status, {

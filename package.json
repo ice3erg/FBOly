@@ -1,0 +1,13 @@
+{
+  "name": "fboly",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FBOly single-host web service",
+  "scripts": {
+    "build": "npm --prefix frontend ci && npm --prefix frontend run build",
+    "start": "node portable/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
