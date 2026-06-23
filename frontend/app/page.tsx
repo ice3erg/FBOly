@@ -1525,21 +1525,15 @@ function SupplyView({
         <div>
           <h1 className="text-4xl font-semibold tracking-normal">Поставка</h1>
           <p className="mt-2 max-w-3xl text-lg text-muted-foreground">
-            Выберите магазин, загрузите Excel, создайте черновики в Ozon и переходите к поиску слота.
+            Загрузите Excel, создайте черновики в Ozon и переходите к поиску слота.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={onOpenProfile} className="gap-2">
-            <Store className="h-4 w-4" />
-            Магазин
+        {result && (
+          <Button type="button" onClick={onOpenSlotHunter} className="gap-2">
+            <Radar className="h-4 w-4" />
+            К слотам
           </Button>
-          {result && (
-            <Button type="button" onClick={onOpenSlotHunter} className="gap-2">
-              <Radar className="h-4 w-4" />
-              К слотам
-            </Button>
-          )}
-        </div>
+        )}
       </div>
 
       <StoreSelectorCard
@@ -1697,79 +1691,46 @@ function StoreSelectorCard({
   onSelectStore: (storeId: string) => void;
   onOpenProfile: () => void;
 }) {
+  const hasMultipleStores = stores.length > 1;
+
   return (
-    <Card className="overflow-hidden">
-      <CardHeader className="flex flex-col gap-3 border-b border-white/[0.08] bg-white/[0.025] sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
-            <Store className="h-5 w-5" />
-          </div>
-          <div>
-            <CardTitle>Магазин</CardTitle>
-            <CardDescription>
-              Сначала выберите кабинет Ozon, для которого готовим поставку.
-            </CardDescription>
-          </div>
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.025] px-4 py-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-secondary/15 text-secondary">
+          <CheckCircle2 className="h-5 w-5" />
         </div>
-        <Button type="button" variant="outline" onClick={onOpenProfile} className="gap-2">
-          <Settings className="h-4 w-4" />
-          Настроить
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-4 p-5">
-        {stores.length ? (
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-            <div className="space-y-2">
-              <Label htmlFor="supply-store-select">Активный магазин</Label>
-              <select
-                id="supply-store-select"
-                value={activeStoreId ?? ""}
-                onChange={(event) => onSelectStore(event.target.value)}
-                className="h-11 w-full rounded-lg border border-white/[0.10] bg-[#101019] px-3 text-sm text-foreground outline-none transition focus:border-primary/70 focus:ring-2 focus:ring-primary/35"
-              >
-                {stores.map((store) => (
-                  <option key={store.id} value={store.id}>
-                    {store.title || "Магазин Ozon"} {store.status === "success" ? "· подключён" : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="rounded-lg border border-white/[0.08] bg-white/[0.035] px-4 py-3 text-sm">
-              <div className="font-medium">{activeStore?.title || "Магазин не выбран"}</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {activeStore?.clientId ? `Client ID: ${activeStore.clientId}` : "Client ID не указан"}
-              </div>
-            </div>
-          </div>
+        {hasMultipleStores ? (
+          <select
+            value={activeStoreId ?? ""}
+            onChange={(event) => onSelectStore(event.target.value)}
+            className="h-9 max-w-[260px] rounded-lg border border-white/[0.10] bg-[#101019] px-3 text-sm font-medium text-foreground outline-none transition focus:border-primary/70 focus:ring-2 focus:ring-primary/35"
+          >
+            {stores.map((store) => (
+              <option key={store.id} value={store.id}>
+                {store.title || "Магазин Ozon"}
+              </option>
+            ))}
+          </select>
         ) : (
-          <div className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-            Добавьте магазин в профиле, чтобы начать работу.
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">
+              {activeStore?.title || "Магазин Ozon"}
+              <span className="ml-2 text-xs font-normal text-secondary">подключён</span>
+            </div>
+            {activeStore?.clientId && (
+              <div className="text-xs text-muted-foreground">Client ID: {activeStore.clientId}</div>
+            )}
           </div>
         )}
-
-        <div
-          className={cn(
-            "rounded-lg border p-3 text-sm",
-            connectionStatus.type === "success" &&
-              "border-secondary/30 bg-secondary/10 text-purple-100",
-            connectionStatus.type === "error" &&
-              "border-destructive/30 bg-destructive/10 text-destructive",
-            connectionStatus.type === "idle" && "bg-muted/40 text-muted-foreground",
-          )}
-        >
-          {activeStore
-            ? connectionStatus.message
-            : "Активный магазин не выбран"}
-        </div>
-
-        {!hasFullCredentials && (
-          <div className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-            Чтобы Ozon нашёл товары и склады, у активного магазина должны быть Client ID и API Key.
-          </div>
-        )}
-
-      </CardContent>
-    </Card>
+      </div>
+      <button
+        type="button"
+        onClick={onOpenProfile}
+        className="text-sm text-muted-foreground transition hover:text-foreground"
+      >
+        Сменить магазин
+      </button>
+    </div>
   );
 }
 
@@ -2756,11 +2717,7 @@ function SlotHunterView({
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" onClick={onOpenSupply} className="gap-2">
             <Upload className="h-4 w-4" />
-            Поставка
-          </Button>
-          <Button type="button" variant="outline" onClick={onOpenProfile} className="gap-2">
-            <Store className="h-4 w-4" />
-            Магазин
+            К поставке
           </Button>
         </div>
       </div>
