@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-23-direct-v2-only-fast-429";
+const APP_VERSION = "2026-06-23-classic-v2-fallback";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1447,24 +1447,49 @@ class OzonClient {
       if (!warehouseIds.length) {
         throw new Error("Для поиска слотов crossdock нужна выбранная точка отгрузки Ozon. Выберите точку кросс-докинга в поставке и заново запустите охотника.");
       }
-      return await this.post("/v1/draft/timeslot/info", {
-        draft_id: numericDraftId || draftId,
-        date_from: toOzonTimestampStartOfDay(dateFrom),
-        date_to: toOzonTimestampEndOfDay(dateTo),
-        warehouse_ids: warehouseIds,
-      }, slotOptions);
+      try {
+        return await this.post("/v1/draft/timeslot/info", {
+          draft_id: numericDraftId || draftId,
+          date_from: toOzonTimestampStartOfDay(dateFrom),
+          date_to: toOzonTimestampEndOfDay(dateTo),
+          warehouse_ids: warehouseIds,
+        }, slotOptions);
+      } catch (error) {
+        if (!isVersionFallbackError(error)) throw error;
+        const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
+        return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", {
+          draft_id: numericDraftId || draftId,
+          date_from: dateFrom,
+          date_to: dateTo,
+          supply_type: resolveSupplyType(candidate),
+        }, selectedWarehouses, slotOptions);
+      }
     }
     if (resolveDraftFlow(candidate) === "classic") {
       const warehouseIds = normalizePositiveOzonIds(candidate.warehouse_ids).slice(0, 20).map(String);
-      if (!warehouseIds.length) {
-        throw new Error("Р”Р»СЏ РїРѕРёСЃРєР° СЃР»РѕС‚РѕРІ РЅСѓР¶РЅС‹ ID СЃРєР»Р°РґРѕРІ Ozon. РЎРЅР°С‡Р°Р»Р° РґРѕР¶РґРёС‚РµСЃСЊ, РїРѕРєР° С‡РµСЂРЅРѕРІРёРє РїСЂРѕР№РґС‘С‚ СЂР°СЃС‡С‘С‚ СЃРєР»Р°РґРѕРІ.");
+      try {
+        if (!warehouseIds.length) {
+          throw Object.assign(new Error("classic timeslot: нет warehouse_ids, пробуем v2"), { __forceV2: true });
+        }
+        return await this.post("/v1/draft/timeslot/info", {
+          draft_id: numericDraftId || draftId,
+          date_from: toOzonTimestampStartOfDay(dateFrom),
+          date_to: toOzonTimestampEndOfDay(dateTo),
+          warehouse_ids: warehouseIds,
+        }, slotOptions);
+      } catch (error) {
+        // v1 устарел (obsolete) или нет warehouse_ids — переключаемся на v2 как direct
+        if (error.__forceV2 || isVersionFallbackError(error)) {
+          const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
+          return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", {
+            draft_id: numericDraftId || draftId,
+            date_from: dateFrom,
+            date_to: dateTo,
+            supply_type: resolveSupplyType(candidate),
+          }, selectedWarehouses, slotOptions);
+        }
+        throw error;
       }
-      return await this.post("/v1/draft/timeslot/info", {
-        draft_id: numericDraftId || draftId,
-        date_from: toOzonTimestampStartOfDay(dateFrom),
-        date_to: toOzonTimestampEndOfDay(dateTo),
-        warehouse_ids: warehouseIds,
-      }, slotOptions);
     }
     // Direct: только v2 — v1 устарел для direct-поставок
     const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
@@ -1530,20 +1555,35 @@ class OzonClient {
       const warehouseId = extractSlotWarehouseId(selectedSlot)
         || normalizePositiveOzonIds(candidate.warehouse_ids).slice(0, 1)[0];
       if (!warehouseId) {
-        throw new Error("Ozon РЅР°С€С‘Р» СЃР»РѕС‚, РЅРѕ РЅРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ warehouse_id РґР»СЏ Р±СЂРѕРЅРё.");
+        throw new Error("Ozon нашёл слот, но не удалось определить warehouse_id для брони.");
       }
-      return await this.post("/v1/draft/supply/create", {
-        draft_id: toPositiveIntegerId(draftId) || draftId,
-        warehouse_id: warehouseId,
-        timeslot: {
-          from_in_timezone: normalizedSlot.from_in_timezone,
-          to_in_timezone: normalizedSlot.to_in_timezone,
-        },
-      }, {
-        maxRetries: 0,
-        minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-        base429DelayMs: 15000,
-      });
+      try {
+        return await this.post("/v1/draft/supply/create", {
+          draft_id: toPositiveIntegerId(draftId) || draftId,
+          warehouse_id: warehouseId,
+          timeslot: {
+            from_in_timezone: normalizedSlot.from_in_timezone,
+            to_in_timezone: normalizedSlot.to_in_timezone,
+          },
+        }, {
+          maxRetries: 0,
+          minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
+          base429DelayMs: 15000,
+        });
+      } catch (error) {
+        if (!isVersionFallbackError(error)) throw error;
+        // v1 устарел — бронируем через v2
+        const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
+        return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/supply/create", {
+          draft_id: toPositiveIntegerId(draftId) || draftId,
+          timeslot: normalizedSlot,
+          supply_type: resolveSupplyType(candidate),
+        }, selectedWarehouses, {
+          maxRetries: 0,
+          minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
+          base429DelayMs: 15000,
+        });
+      }
     }
     const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
     const normalizedSlot = normalizeTimeslotForOzon(selectedSlot);
