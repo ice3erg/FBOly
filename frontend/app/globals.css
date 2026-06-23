@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 18% 3%;
+    --foreground: 0 0% 100%;
+    --card: 240 15% 8%;
+    --card-foreground: 0 0% 100%;
+    --primary: 262 83% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 271 91% 65%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 240 9% 12%;
+    --muted-foreground: 240 5% 65%;
+    --accent: 280 95% 58%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 100% / 0.08;
+    --input: 0 0% 100% / 0.10;
+    --ring: 262 83% 58%;
+    --radius: 8px;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    letter-spacing: 0;
+    background:
+      radial-gradient(circle at 4% 100%, rgba(124, 58, 237, 0.32), transparent 28rem),
+      radial-gradient(circle at 88% 0%, rgba(139, 92, 246, 0.20), transparent 32rem),
+      linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+      linear-gradient(180deg, #07070a 0%, #0b0b12 48%, #050507 100%);
+    background-size: auto, auto, 34px 34px, 34px 34px, auto;
+    min-height: 100vh;
+  }
+
+  ::selection {
+    background: rgba(139, 92, 246, 0.45);
+    color: #ffffff;
+  }
+
+  input,
+  textarea,
+  select {
+    color-scheme: dark;
+  }
+
+  button,
+  input {
+    letter-spacing: 0;
+  }
+}
