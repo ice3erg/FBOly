@@ -713,8 +713,15 @@ function serveFrontendAsset(res, requestPathname) {
 
   if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
     if (path.extname(relativePath)) return false;
-    filePath = path.join(distRoot, "index.html");
-    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return false;
+    // С trailingSlash: true Next.js генерирует /auth/index.html — пробуем сначала его
+    const subIndexPath = path.join(distRoot, relativePath, "index.html");
+    if (fs.existsSync(subIndexPath) && fs.statSync(subIndexPath).isFile()) {
+      filePath = subIndexPath;
+    } else {
+      // Фоллбэк на корневой index.html для SPA-навигации
+      filePath = path.join(distRoot, "index.html");
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return false;
+    }
   }
 
   const contentType = STATIC_MIME_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
