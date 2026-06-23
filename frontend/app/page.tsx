@@ -1600,7 +1600,6 @@ function SupplyView({
                 type="submit"
                 disabled={
                   !selectedFile ||
-                  !hasWarehouseWeights ||
                   !hasFullCredentials ||
                   isLoading
                 }
@@ -1645,101 +1644,6 @@ function SupplyView({
           </CardContent>
         </Card>
       )}
-
-      <details className="rounded-lg border border-white/[0.08] bg-white/[0.035] p-4 text-sm">
-        <summary className="cursor-pointer list-none font-medium">
-          Дополнительно: настройки распределения
-        </summary>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Обычно менять не нужно: сервис сам распределит товары по кластерам Ozon.
-        </p>
-        <div className="mt-4 space-y-4">
-          {warehouses.map((warehouse, index) => (
-            <div
-              key={`${warehouse.name}-${index}`}
-              className="grid grid-cols-[minmax(0,1fr)_92px_40px] items-end gap-3"
-            >
-              <div className="min-w-0">
-                <Label htmlFor={`warehouse-name-${index}`}>Город или кластер</Label>
-                <Input
-                  id={`warehouse-name-${index}`}
-                  value={warehouse.name}
-                  onChange={(event) =>
-                    onWarehouseNameChange(index, event.target.value)
-                  }
-                  placeholder="Например, Воронеж"
-                />
-                <div className="mt-2 h-2 rounded-full bg-muted">
-                  <div
-                    className="h-2 rounded-full bg-secondary"
-                    style={{
-                      width: `${Math.min(Math.max(warehouse.percentage, 0), 100)}%`,
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="relative">
-                <Label htmlFor={`warehouse-percent-${index}`}>Вес</Label>
-                <Input
-                  id={`warehouse-percent-${index}`}
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={warehouse.percentage}
-                  onChange={(event) =>
-                    onWarehousePercentageChange(index, event.target.value)
-                  }
-                  className="pr-8"
-                />
-                <span className="pointer-events-none absolute right-3 top-8 text-sm text-muted-foreground">
-                  %
-                </span>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => onRemoveWarehouse(index)}
-                disabled={warehouses.length <= 1}
-                className="text-muted-foreground hover:text-destructive"
-                aria-label="Удалить направление"
-              >
-                <XCircle className="h-4 w-4" />
-              </Button>
-            </div>
-          ))}
-
-          <div className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-            Сервис будет распределять и создавать черновики только по этому списку. Сумма весов: {Math.round(totalPercentage * 100) / 100}%
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={onAddWarehouse} className="gap-2">
-              <Plus className="h-4 w-4" />
-              Добавить город
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onLoadOzonWarehouses}
-              disabled={isLoadingWarehouses || !hasFullCredentials}
-              className="gap-2"
-            >
-              {isLoadingWarehouses ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Building2 className="h-4 w-4" />
-              )}
-              Загрузить города Ozon
-            </Button>
-            <Button type="button" variant="ghost" onClick={onResetWarehouses} className="gap-2">
-              <RefreshCw className="h-4 w-4" />
-              Вернуть крупные города
-            </Button>
-          </div>
-        </div>
-      </details>
 
       {requestError && (
         <Alert variant="destructive">
