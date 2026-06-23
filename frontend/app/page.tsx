@@ -299,7 +299,6 @@ type ConnectionStatus =
 type AppView =
   | "supply"
   | "slotHunter"
-  | "history"
   | "profile";
 
 const DEFAULT_WAREHOUSES: WarehousePercentage[] = [
@@ -340,7 +339,6 @@ const navItems: Array<{
   { id: "supply", label: "Поставка", icon: Upload },
   { id: "slotHunter", label: "Слоты", icon: Radar },
   { id: "profile", label: "Магазин", icon: Store },
-  { id: "history", label: "История", icon: History },
 ];
 
 const FBOLY_AUTH_SESSION_KEY = "fboly-auth-session";
@@ -932,7 +930,7 @@ export default function Home() {
       0,
     );
     const approved = window.confirm(
-      `Создать ${candidates.length} черновик(а) FBO в Ozon на ${totalQuantity} шт.?`,
+      `Подготовить ${candidates.length} поставку(и) на ${totalQuantity} шт.? Это создаст черновики в Ozon — заявка появится в кабинете после брони слота.`,
     );
     if (!approved) {
       return;
@@ -976,7 +974,13 @@ export default function Home() {
           results: visibleResults,
         });
 
-        if (isFinalJob) break;
+        if (isFinalJob) {
+          // Черновики подготовлены — сразу ведём к поиску слота (это один процесс)
+          if (job.status === "completed") {
+            setTimeout(() => setActiveView("slotHunter"), 1200);
+          }
+          break;
+        }
         await delay(5000);
         const pollResponse = await fetch(`${API_URL}/api/ozon/draft-jobs/${job.id}`);
         const pollPayload = await pollResponse.json();
@@ -1312,7 +1316,6 @@ export default function Home() {
               onOpenProfile={() => setActiveView("profile")}
             />
           )}
-          {activeView === "history" && <HistoryView history={history} />}
           {activeView === "profile" && (
             <ProfileView
               stores={stores}
@@ -1499,6 +1502,15 @@ function SupplyView({
   onOpenSlotHunter: () => void;
 }) {
   const isStoreConnected = hasFullCredentials && connectionStatus.type === "success";
+  const resultRef = useRef<HTMLDivElement | null>(null);
+  const hasResult = Boolean(result);
+
+  // Автоскролл к результату, когда распределение готово
+  useEffect(() => {
+    if (hasResult && resultRef.current) {
+      resultRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [hasResult]);
 
   // Магазин не подключён — показываем приглашение, а не формы
   if (!isStoreConnected) {
@@ -1545,6 +1557,10 @@ function SupplyView({
         onSelectStore={onSelectStore}
         onOpenProfile={onOpenProfile}
       />
+
+      <div className="rounded-xl border border-white/[0.08] bg-white/[0.025] px-5 py-4">
+        <StepProgress current={result ? 2 : 1} />
+      </div>
 
       <Card className="overflow-hidden">
         <CardHeader className="border-b border-white/[0.08] bg-white/[0.025]">
@@ -1613,16 +1629,13 @@ function SupplyView({
       </Card>
 
       {result && (
-        <Card>
+        <Card ref={resultRef}>
           <CardHeader className="border-b border-white/[0.08] bg-white/[0.025]">
-            <div className="flex items-center gap-3">
-              <StepBadge value="2" />
-              <div>
-                <CardTitle>Результат распределения</CardTitle>
-                <CardDescription>
-                  Проверьте итог и выберите кластеры для черновиков.
-                </CardDescription>
-              </div>
+            <div>
+              <CardTitle>Что распределилось</CardTitle>
+              <CardDescription>
+                Итог расчёта по статистике Ozon. Ниже выберите кластеры и подготовьте поставку.
+              </CardDescription>
             </div>
           </CardHeader>
           <CardContent className="space-y-4 p-5">
@@ -2175,29 +2188,6 @@ function DraftCreationPanel({
     setSelectedWarehouses([]);
   }
 
-  async function searchDropOffPoints() {
-    const query = dropOffSearch.trim();
-    if (query.length < 4) {
-      setDropOffError("Введите минимум 4 символа.");
-      setDropOffPoints([]);
-      return;
-    }
-    setIsSearchingDropOffs(true);
-    setDropOffError("");
-    try {
-      const points = await onSearchCrossdockPoints(query);
-      setDropOffPoints(points);
-      if (!points.length) {
-        setDropOffError("Ozon не вернул точки по этому запросу.");
-      }
-    } catch (error) {
-      setDropOffPoints([]);
-      setDropOffError(formatRequestError(error, "Не удалось найти точки"));
-    } finally {
-      setIsSearchingDropOffs(false);
-    }
-  }
-
   function selectDropOffPoint(point: CrossdockPoint) {
     setDropOffPointWarehouseId(point.id);
     setDropOffPointWarehouseType(String(point.warehouse_type || ""));
@@ -2206,15 +2196,41 @@ function DraftCreationPanel({
     setDropOffError("");
   }
 
+  // Автоподсказка точек отгрузки по мере ввода (debounce 500мс)
+  useEffect(() => {
+    const query = dropOffSearch.trim();
+    // Не ищем, если уже выбрана точка с этим названием или текст короткий
+    if (query.length < 4 || query === selectedDropOffName) {
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setIsSearchingDropOffs(true);
+      setDropOffError("");
+      try {
+        const points = await onSearchCrossdockPoints(query);
+        setDropOffPoints(points);
+        if (!points.length) {
+          setDropOffError("Ozon не вернул точки по этому запросу.");
+        }
+      } catch (error) {
+        setDropOffPoints([]);
+        setDropOffError(formatRequestError(error, "Не удалось найти точки"));
+      } finally {
+        setIsSearchingDropOffs(false);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [dropOffSearch, selectedDropOffName, onSearchCrossdockPoints]);
+
   return (
     <Card className="overflow-hidden">
       <CardHeader className="flex flex-col gap-3 border-b border-white/[0.08] bg-white/[0.025] lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-center gap-3">
-          <StepBadge value="3" />
+          <StepBadge value="2" />
           <div>
-            <CardTitle>Создание черновиков в Ozon</CardTitle>
+            <CardTitle>Подготовить поставку</CardTitle>
             <CardDescription>
-              Выберите кластеры, способ отгрузки и отправьте черновики в кабинет.
+              Выберите кластеры и способ отгрузки. Заявка появится в кабинете Ozon после того, как охотник найдёт и забронирует слот.
             </CardDescription>
           </div>
         </div>
@@ -2246,7 +2262,7 @@ function DraftCreationPanel({
             ) : (
               <Cloud className="h-4 w-4" />
             )}
-            Создать черновики
+            Подготовить
           </Button>
         </div>
       </CardHeader>
@@ -2287,40 +2303,31 @@ function DraftCreationPanel({
           </div>
           {supplyMode === "crossdock" && (
             <div className="mt-4 space-y-3">
-              <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
-                <div className="space-y-2">
-                  <Label htmlFor="drop-off-search">Точка отгрузки</Label>
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      id="drop-off-search"
-                      value={dropOffSearch}
-                      onChange={(event) => setDropOffSearch(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          searchDropOffPoints();
-                        }
-                      }}
-                      placeholder="Название или адрес, например Колпино"
-                      className="pl-9"
-                    />
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={searchDropOffPoints}
-                  disabled={isSearchingDropOffs}
-                  className="self-end gap-2"
-                >
-                  {isSearchingDropOffs ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Search className="h-4 w-4" />
+              <div className="space-y-2">
+                <Label htmlFor="drop-off-search">Точка отгрузки</Label>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="drop-off-search"
+                    value={dropOffSearch}
+                    onChange={(event) => {
+                      setDropOffSearch(event.target.value);
+                      // Сброс выбранной точки при ручном изменении текста
+                      if (event.target.value !== selectedDropOffName) {
+                        setDropOffPointWarehouseId("");
+                      }
+                    }}
+                    placeholder="Начните вводить город или адрес, например Колпино"
+                    className="pl-9 pr-9"
+                    autoComplete="off"
+                  />
+                  {isSearchingDropOffs && (
+                    <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
                   )}
-                  Найти
-                </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Подсказки появятся автоматически после 4 символов.
+                </p>
               </div>
 
               {dropOffPointWarehouseId && (
@@ -2458,10 +2465,10 @@ function DraftCreationPanel({
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button type="button" onClick={onOpenSlotHunter} className="gap-2">
                   <Radar className="h-4 w-4" />
-                  Перейти к охотнику на слоты
+                  Найти слот и создать заявку
                 </Button>
                 <span className="text-xs text-muted-foreground">
-                  Черновики готовы, теперь можно искать окно поставки.
+                  Черновики готовы. Заявка появится в кабинете Ozon после брони слота.
                 </span>
               </div>
             )}
@@ -2720,6 +2727,10 @@ function SlotHunterView({
             К поставке
           </Button>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-white/[0.08] bg-white/[0.025] px-5 py-4">
+        <StepProgress current={3} />
       </div>
 
       {availableCandidates.length > 0 && (
@@ -3146,57 +3157,6 @@ function SlotHunterView({
   );
 }
 
-function HistoryView({ history }: { history: HistoryRecord[] }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>История обработок</CardTitle>
-        <CardDescription>
-          Последние расчёты сохраняются в браузере до подключения базы данных.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {history.length ? (
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[720px] text-left text-sm">
-              <thead className="bg-muted text-xs">
-                <tr>
-                  <th className="px-3 py-2">Дата</th>
-                  <th className="px-3 py-2">Файл</th>
-                  <th className="px-3 py-2">Найдено</th>
-                  <th className="px-3 py-2">Ошибки</th>
-                  <th className="px-3 py-2">Файлов</th>
-                  <th className="px-3 py-2">Итого</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((item) => (
-                  <tr key={item.id} className="border-t">
-                    <td className="px-3 py-2">{formatDate(item.createdAt)}</td>
-                    <td className="max-w-[260px] truncate px-3 py-2 font-medium">
-                      {item.fileName}
-                    </td>
-                    <td className="px-3 py-2">{item.resolved}</td>
-                    <td className="px-3 py-2">{item.errors}</td>
-                    <td className="px-3 py-2">{item.files}</td>
-                    <td className="px-3 py-2">{item.totalQuantity} шт.</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <EmptyState
-            icon={History}
-            title="История пустая"
-            text="После первой обработки Excel здесь появятся записи."
-          />
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 function buildDistributionExplanation(result: ProcessResponse) {
   const clustersCount = result.files.length;
   const totalQuantity = result.total_output_quantity;
@@ -3220,6 +3180,54 @@ function StepBadge({ value }: { value: string }) {
   return (
     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-accent text-sm font-semibold text-white shadow-[0_0_26px_rgba(124,58,237,0.32)]">
       {value}
+    </div>
+  );
+}
+
+function StepProgress({ current }: { current: 1 | 2 | 3 }) {
+  const steps = [
+    { n: 1, label: "Загрузить Excel" },
+    { n: 2, label: "Подготовить" },
+    { n: 3, label: "Найти слот" },
+  ];
+  return (
+    <div className="flex items-center gap-2">
+      {steps.map((step, index) => {
+        const done = step.n < current;
+        const active = step.n === current;
+        return (
+          <div key={step.n} className="flex flex-1 items-center gap-2">
+            <div className="flex items-center gap-2">
+              <div
+                className={cn(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition",
+                  done && "bg-secondary/20 text-secondary",
+                  active && "bg-gradient-to-br from-primary to-accent text-white shadow-[0_0_20px_rgba(124,58,237,0.35)]",
+                  !done && !active && "border border-white/15 text-muted-foreground",
+                )}
+              >
+                {done ? <CheckCircle2 className="h-4 w-4" /> : step.n}
+              </div>
+              <span
+                className={cn(
+                  "hidden text-sm font-medium sm:inline",
+                  active ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {step.label}
+              </span>
+            </div>
+            {index < steps.length - 1 && (
+              <div
+                className={cn(
+                  "h-px flex-1 transition",
+                  step.n < current ? "bg-secondary/40" : "bg-white/10",
+                )}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
