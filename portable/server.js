@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-23-noginsk-moscow-cluster";
+const APP_VERSION = "2026-06-23-draft-spacing-no-429";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -86,7 +86,8 @@ const OZON_CLASSIC_DRAFT_INFO_MAX_ATTEMPTS = Number(process.env.OZON_CLASSIC_DRA
 const OZON_DRAFT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_DRAFT_RATE_LIMIT_COOLDOWN_MS || 15000);
 const OZON_DRAFT_CREATE_ROUTE_MAX_ATTEMPTS = Number(process.env.OZON_DRAFT_CREATE_ROUTE_MAX_ATTEMPTS || 1);
 const DRAFT_CREATION_JOB_RATE_LIMIT_COOLDOWN_MS = Number(process.env.DRAFT_CREATION_JOB_RATE_LIMIT_COOLDOWN_MS || 25000);
-const DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET = Number(process.env.DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET || 3);
+const DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET = Number(process.env.DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET || 8);
+const DRAFT_CREATION_SPACING_MS = Number(process.env.DRAFT_CREATION_SPACING_MS || 7000);
 const TARGET_STOCK_DAYS = 21;
 const ANALYTICS_PERIOD_DAYS = 30;
 const MIN_OUTPUT_CLUSTER_QUANTITY = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 15);
@@ -3230,6 +3231,12 @@ async function processDraftCreationJob(job) {
     return;
   }
 
+  // Уважаем общую паузу между созданиями (спейсинг против 429)
+  if (job.next_attempt_at && new Date(job.next_attempt_at).getTime() > now) {
+    job.updated_at = new Date().toISOString();
+    return;
+  }
+
   const readyTarget = activeTargets
     .filter((target) => !target.next_attempt_at || new Date(target.next_attempt_at).getTime() <= now)
     .sort((a, b) => a.warehouse.localeCompare(b.warehouse))[0];
@@ -3272,6 +3279,15 @@ async function attemptDraftCreationTarget(job, target) {
       attempts_count: target.attempts_count,
     };
     job.last_message = target.last_message;
+    // Пауза перед созданием следующего черновика, чтобы не ловить 429 Ozon.
+    // Лимит создания черновиков жёсткий — успешные запросы тоже нужно разносить.
+    const remainingTargets = job.targets.filter(
+      (item) => !["created", "failed"].includes(item.status),
+    );
+    if (remainingTargets.length) {
+      job.next_attempt_at = new Date(Date.now() + DRAFT_CREATION_SPACING_MS).toISOString();
+      job.last_message = `Черновик создан. Пауза перед следующим, чтобы не превысить лимит Ozon`;
+    }
   } catch (error) {
     const status = Number(error && error.status);
     const isRateLimited = isOzonRateLimitError(error);
