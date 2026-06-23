@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-23-v2-only-no-dead-v1";
+const APP_VERSION = "2026-06-23-fast-retry-15s";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -90,10 +90,10 @@ const DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET = Number(process.env.DRAFT_CREA
 const TARGET_STOCK_DAYS = 21;
 const ANALYTICS_PERIOD_DAYS = 30;
 const MIN_OUTPUT_CLUSTER_QUANTITY = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 15);
-const SLOT_HUNTER_DEFAULT_INTERVAL_SECONDS = 180;
-const SLOT_HUNTER_MIN_INTERVAL_SECONDS = 90;
+const SLOT_HUNTER_DEFAULT_INTERVAL_SECONDS = 15;
+const SLOT_HUNTER_MIN_INTERVAL_SECONDS = 8;
 const SLOT_HUNTER_DEFAULT_MAX_MINUTES = 240;
-const SLOT_HUNTER_MAX_ATTEMPTS_PER_TARGET = 500;
+const SLOT_HUNTER_MAX_ATTEMPTS_PER_TARGET = 2000;
 
 const TEMPLATE_COLUMNS = ["артикул", "имя (необязательно)", "количество"];
 const INPUT_TEMPLATE_COLUMNS = ["SKU Ozon", "артикул", "название товара", "количество", "комментарий"];
@@ -3723,7 +3723,12 @@ async function attemptSlotHunterTarget(job, target) {
       target.last_message = "Достигнут лимит попыток по городу";
       return;
     }
-    scheduleSlotTargetRetry(job, target, status === 429 ? 2 : 1);
+    // При 429 pauseSlotHunterForRateLimit уже выставил next_attempt_at (короткая пауза).
+    // Не перезатираем его длинным интервалом — иначе ждём минуты вместо секунд.
+    if (status === 429) {
+      return;
+    }
+    scheduleSlotTargetRetry(job, target, 1);
   }
 }
 

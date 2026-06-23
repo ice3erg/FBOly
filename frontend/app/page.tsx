@@ -3255,7 +3255,7 @@ function SlotHunterView({
   onOpenProfile: () => void;
 }) {
   const [autoBook, setAutoBook] = useState(true);
-  const [intervalSeconds, setIntervalSeconds] = useState(180);
+  const [intervalSeconds, setIntervalSeconds] = useState(15);
   const [maxMinutes, setMaxMinutes] = useState(240);
   const [concurrencyLimit, setConcurrencyLimit] = useState(1);
   const [dateFrom, setDateFrom] = useState(() => new Date().toISOString().slice(0, 10));
