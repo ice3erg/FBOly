@@ -345,9 +345,12 @@ const navItems: Array<{
   { id: "history", label: "История", icon: History },
 ];
 
+const FBOLY_AUTH_SESSION_KEY = "fboly-auth-session";
+
 export default function Home() {
   const [user, setUser] = useState<AppUser>(DEFAULT_USER);
   const [activeView, setActiveView] = useState<AppView>("supply");
+  const [authChecked, setAuthChecked] = useState(false);
 
   const [clientId, setClientId] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -379,6 +382,28 @@ export default function Home() {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
 
   useEffect(() => {
+    // Проверяем сессию из новой страницы /auth
+    const authSession = window.localStorage.getItem(FBOLY_AUTH_SESSION_KEY);
+    if (!authSession) {
+      window.location.href = "/auth";
+      return;
+    }
+    try {
+      const session = JSON.parse(authSession) as { email?: string; name?: string };
+      if (session.email || session.name) {
+        setUser({
+          name: session.name || session.email?.split("@")[0] || "Пользователь",
+          email: session.email || "",
+          organization: "Мой магазин Ozon",
+        });
+      }
+    } catch {
+      window.localStorage.removeItem(FBOLY_AUTH_SESSION_KEY);
+      window.location.href = "/auth";
+      return;
+    }
+    setAuthChecked(true);
+
     const savedUser = window.localStorage.getItem(AUTH_STORAGE_KEY);
     if (savedUser) {
       try {
@@ -491,11 +516,9 @@ export default function Home() {
 
   function logout() {
     window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    window.localStorage.removeItem(FBOLY_AUTH_SESSION_KEY);
     window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(DEFAULT_USER));
-    setUser(DEFAULT_USER);
-    setActiveView("supply");
-    setResult(null);
-    setSelectedFile(null);
+    window.location.href = "/auth";
   }
 
   function persistStores(nextStores = stores, nextActiveStoreId = activeStoreId) {
@@ -1202,6 +1225,8 @@ export default function Home() {
       setIsStoppingSlotHunter(false);
     }
   }
+
+  if (!authChecked) return null;
 
   return (
     <main className="min-h-screen overflow-hidden">
