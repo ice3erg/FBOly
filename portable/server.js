@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-23-fix-obsolete-timeslot-fallback";
+const APP_VERSION = "2026-06-23-direct-v2-only-fast-429";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -76,7 +76,7 @@ const OZON_DRAFT_CREATE_QUIET_PERIOD_MS = Number(process.env.OZON_DRAFT_CREATE_Q
 const OZON_DRAFT_CANDIDATE_DELAY_MS = 3000;
 const OZON_DRAFT_POLL_DELAY_MS = 2500;
 const OZON_SLOT_REQUEST_DELAY_MS = 3500;
-const OZON_SLOT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_SLOT_RATE_LIMIT_COOLDOWN_MS || 30000);
+const OZON_SLOT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_SLOT_RATE_LIMIT_COOLDOWN_MS || 8000);
 const OZON_BOOKING_RATE_LIMIT_COOLDOWN_MS = 180000;
 const OZON_SLOT_DRAFT_SPACING_MS = 30000;
 const OZON_AFTER_DRAFT_SLOT_DELAY_MS = 20000;
@@ -1436,6 +1436,12 @@ class OzonClient {
     const dateFrom = cleanDateInput(settings.date_from) || fallbackDateFrom;
     const rawDateTo = cleanDateInput(settings.date_to) || fallbackDateTo;
     const dateTo = rawDateTo < dateFrom ? dateFrom : rawDateTo;
+    const slotOptions = {
+      maxRetries: 0,
+      minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
+      base429DelayMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
+      rateLimitCooldownMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
+    };
     if (isCrossdockCandidate(candidate)) {
       const warehouseIds = getCrossdockTimeslotWarehouseIds(candidate).slice(0, 20).map(String);
       if (!warehouseIds.length) {
@@ -1446,12 +1452,7 @@ class OzonClient {
         date_from: toOzonTimestampStartOfDay(dateFrom),
         date_to: toOzonTimestampEndOfDay(dateTo),
         warehouse_ids: warehouseIds,
-      }, {
-        maxRetries: 0,
-        minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-        base429DelayMs: 15000,
-        rateLimitCooldownMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
-      });
+      }, slotOptions);
     }
     if (resolveDraftFlow(candidate) === "classic") {
       const warehouseIds = normalizePositiveOzonIds(candidate.warehouse_ids).slice(0, 20).map(String);
@@ -1463,13 +1464,9 @@ class OzonClient {
         date_from: toOzonTimestampStartOfDay(dateFrom),
         date_to: toOzonTimestampEndOfDay(dateTo),
         warehouse_ids: warehouseIds,
-      }, {
-        maxRetries: 0,
-        minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-        base429DelayMs: 15000,
-        rateLimitCooldownMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
-      });
+      }, slotOptions);
     }
+    // Direct: только v2 — v1 устарел для direct-поставок
     const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
     const basePayload = {
       draft_id: numericDraftId || draftId,
@@ -1478,12 +1475,7 @@ class OzonClient {
       supply_type: resolveSupplyType(candidate),
     };
     try {
-      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", basePayload, selectedWarehouses, {
-        maxRetries: 0,
-        minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-        base429DelayMs: 15000,
-        rateLimitCooldownMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
-      });
+      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", basePayload, selectedWarehouses, slotOptions);
     } catch (error) {
       if (isCrossdockDeliveryFlowError(error)) {
         candidate.supply_mode = "crossdock";
@@ -1494,27 +1486,8 @@ class OzonClient {
             date_from: toOzonTimestampStartOfDay(dateFrom),
             date_to: toOzonTimestampEndOfDay(dateTo),
             warehouse_ids: warehouseIds,
-          }, {
-            maxRetries: 0,
-            minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-            base429DelayMs: 15000,
-            rateLimitCooldownMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
-          });
+          }, slotOptions);
         }
-      }
-      // Всегда пробуем v1 при obsolete/deprecated — Ozon мигрирует методы постепенно
-      if (isVersionFallbackError(error)) {
-        return await this.post("/v1/draft/timeslot/info", {
-          draft_id: numericDraftId || draftId,
-          date_from: toOzonTimestampStartOfDay(dateFrom),
-          date_to: toOzonTimestampEndOfDay(dateTo),
-          warehouse_ids: selectedWarehouses.map((warehouse) => warehouse.storage_warehouse_id),
-        }, {
-          maxRetries: 0,
-          minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-          base429DelayMs: 15000,
-          rateLimitCooldownMs: 90000,
-        });
       }
       throw error;
     }
@@ -3862,16 +3835,28 @@ function pauseSlotHunterForRateLimit(job, target, error, actionType = "") {
     ? OZON_BOOKING_RATE_LIMIT_COOLDOWN_MS * bookingPenalty
     : ["create_draft", "check_draft"].includes(actionType)
       ? Math.max(OZON_DRAFT_RATE_LIMIT_COOLDOWN_MS, 10000)
-      : OZON_SLOT_RATE_LIMIT_COOLDOWN_MS;
+      : OZON_SLOT_RATE_LIMIT_COOLDOWN_MS; // для слотов теперь 8 сек
   const cooldownMs = Math.max(baseCooldownMs, retryAfterMs);
   const nextAt = new Date(Date.now() + cooldownMs).toISOString();
+
+  // При 429 на слоты — только конкретный target делает паузу, не весь магазин
+  const isSlotAction = !["create_supply", "create_draft", "check_draft"].includes(actionType);
+  if (isSlotAction) {
+    if (target) {
+      target.next_attempt_at = nextAt;
+    }
+    job.last_message = `Ozon: пауза ${Math.round(cooldownMs / 1000)} сек, повторим автоматически`;
+    return;
+  }
+
+  // Для черновиков и бронирования — глобальная пауза по магазину
   job.rateLimitedUntil = nextAt;
   job.next_attempt_at = nextAt;
   job.last_message = actionType === "create_supply"
     ? `Ozon ограничил бронь слота. Делаем длинную паузу до ${new Date(nextAt).toLocaleTimeString("ru-RU")}`
-    : `Ozon ограничил частоту запросов. Делаем общую паузу до ${new Date(nextAt).toLocaleTimeString("ru-RU")}`;
+    : `Ozon ограничил частоту запросов. Делаем паузу до ${new Date(nextAt).toLocaleTimeString("ru-RU")}`;
   for (const item of getActiveSlotTargets(job)) {
-    const jitter = Math.floor(Math.random() * 10000);
+    const jitter = Math.floor(Math.random() * 5000);
     const extraPriorityDelay = item.is_priority ? 0 : Math.floor(job.interval_seconds * 1000);
     item.next_attempt_at = new Date(Date.now() + cooldownMs + extraPriorityDelay + jitter).toISOString();
     if (item.id !== target.id && ["waiting", "searching", "cooldown"].includes(item.status)) {
