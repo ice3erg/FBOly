@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-23-fast-retry-15s";
+const APP_VERSION = "2026-06-23-macrolocal-cluster-required";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1566,6 +1566,19 @@ class OzonClient {
         "Нажмите «Загрузить города Ozon», заново создайте поставку и запустите охотника.",
       );
     }
+    // v2 требует macrolocal_cluster_id > 0. Если его нет — черновик создан старым
+    // способом или без расчёта складов. Просим пересоздать поставку.
+    const hasMacrolocalCluster = selectedWarehouses.some((item) => item.cluster_id);
+    if (!hasMacrolocalCluster) {
+      throw Object.assign(
+        new Error(
+          "Этот черновик создан без macrolocal_cluster_id, который Ozon теперь требует для поиска слотов. " +
+          "Создайте поставку заново: загрузите Excel, нажмите «Создать черновики в Ozon», затем запустите охотника. " +
+          "Старые черновики (созданные до обновления) больше не подходят.",
+        ),
+        { __needRecreateDraft: true },
+      );
+    }
     return selectedWarehouses.slice(0, 20);
   }
   async createSupplyDraftFromCandidate(candidate) {
@@ -2162,18 +2175,25 @@ function buildSelectedClusterWarehousePayloadVariants(selectedWarehouses) {
   const normalized = normalizeSelectedClusterWarehouses(selectedWarehouses);
   if (!normalized.length) return [];
   const first = normalized.slice(0, 1);
-  const withClusterId = first.map((item) => ({
-    ...(item.cluster_id ? { cluster_id: item.cluster_id } : {}),
-    storage_warehouse_id: item.storage_warehouse_id,
-  }));
+  // v2 /draft/timeslot/info требует macrolocal_cluster_id > 0 в каждом элементе.
+  // Если cluster_id есть — отправляем варианты с ним (приоритет macrolocal_cluster_id).
+  const hasClusterId = first.every((item) => item.cluster_id);
   const withMacrolocalClusterId = first.map((item) => ({
     ...(item.cluster_id ? { macrolocal_cluster_id: item.cluster_id } : {}),
+    storage_warehouse_id: item.storage_warehouse_id,
+  }));
+  const withClusterId = first.map((item) => ({
+    ...(item.cluster_id ? { cluster_id: item.cluster_id } : {}),
     storage_warehouse_id: item.storage_warehouse_id,
   }));
   const storageOnly = first.map((item) => ({
     storage_warehouse_id: item.storage_warehouse_id,
   }));
-  const variants = [withClusterId, withMacrolocalClusterId, storageOnly];
+  // Если cluster_id есть — НЕ отправляем storageOnly (Ozon отклонит без macrolocal_cluster_id).
+  // Если cluster_id нет — отправляем только storageOnly (хоть какой-то шанс).
+  const variants = hasClusterId
+    ? [withMacrolocalClusterId, withClusterId]
+    : [storageOnly];
   const seen = new Set();
   return variants.filter((variant) => {
     const key = JSON.stringify(variant);
@@ -3687,8 +3707,10 @@ async function attemptSlotHunterTarget(job, target) {
     const message = error.message || "Ошибка Ozon API";
     const status = Number(error && error.status);
     const isObsolete = isObsoleteMethodError(error);
+    // Ошибка "пересоздайте черновик" — фатальная, нет смысла повторять
+    const needRecreate = Boolean(error && error.__needRecreateDraft);
     // obsolete method — не фатально, getDraftTimeslots сам делает фоллбэк на v1/v2
-    const isRequestRejected = status >= 400 && status < 500 && status !== 429 && !isObsolete;
+    const isRequestRejected = needRecreate || (status >= 400 && status < 500 && status !== 429 && !isObsolete);
     if (error && error.operationId && !target.operation_id) {
       target.operation_id = cleanIdentifier(error.operationId);
     }
@@ -3697,9 +3719,11 @@ async function attemptSlotHunterTarget(job, target) {
       ? currentAction === "create_supply"
         ? "Слот найден, Ozon ограничил бронь. Повторим бронь после паузы"
         : "Пауза из-за лимита Ozon, повторим автоматически"
-      : isRequestRejected
-        ? "Ozon отклонил запрос. Остановил повторы по этому городу, чтобы не крутить ошибку бесконечно"
-        : message;
+      : needRecreate
+        ? "Черновик устарел. Создайте поставку заново и запустите охотника"
+        : isRequestRejected
+          ? "Ozon отклонил запрос. Остановил повторы по этому городу, чтобы не крутить ошибку бесконечно"
+          : message;
     target.status = status === 429 ? "cooldown" : isRequestRejected ? "failed" : "searching";
     if (status === 429) {
       pauseSlotHunterForRateLimit(job, target, error, currentAction);
