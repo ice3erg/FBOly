@@ -1314,6 +1314,7 @@ export default function Home() {
               job={slotHunterJob}
               error={slotHunterError}
               hasFullCredentials={hasFullCredentials}
+              connectionStatus={connectionStatus}
               isStarting={isStartingSlotHunter}
               isStopping={isStoppingSlotHunter}
               onStart={startSlotHunter}
@@ -1673,6 +1674,71 @@ function OverviewView({
   );
 }
 
+function ConnectStorePrompt({
+  hasFullCredentials,
+  connectionStatus,
+  onOpenProfile,
+}: {
+  hasFullCredentials: boolean;
+  connectionStatus: ConnectionStatus;
+  onOpenProfile: () => void;
+}) {
+  // Ключи введены, но проверка не прошла (ошибка или ещё не проверяли)
+  const credentialsButNotVerified = hasFullCredentials && connectionStatus.type !== "success";
+
+  return (
+    <Card>
+      <CardContent className="flex flex-col items-center gap-6 px-6 py-14 text-center">
+        <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-accent text-white shadow-[0_0_40px_rgba(124,58,237,0.4)]">
+          <PlugZap className="h-10 w-10" />
+        </div>
+        <div className="max-w-md space-y-2">
+          <h2 className="text-2xl font-semibold">
+            {credentialsButNotVerified ? "Проверьте подключение магазина" : "Сначала подключите магазин Ozon"}
+          </h2>
+          <p className="text-muted-foreground">
+            {credentialsButNotVerified
+              ? connectionStatus.type === "error"
+                ? `Ozon не принял ключи: ${connectionStatus.message}. Проверьте Client-Id и Api-Key в разделе «Магазин».`
+                : "Ключи введены, но подключение ещё не подтверждено. Нажмите «Проверить подключение» в разделе «Магазин»."
+              : "Чтобы загружать поставки, создавать черновики и ловить слоты, FBOly нужен доступ к вашему магазину через Ozon Seller API."}
+          </p>
+        </div>
+
+        {!hasFullCredentials && (
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-border/60 bg-muted/30 p-5 text-left">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <KeyRound className="h-4 w-4 text-primary" />
+              Что понадобится
+            </div>
+            <ul className="space-y-2 text-sm text-muted-foreground">
+              <li className="flex items-start gap-2">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                <span>Client-Id и Api-Key из личного кабинета Ozon Seller (Настройки → API-ключи)</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                <span>Метод доступа: Admin read-only, Product, Warehouse, Report</span>
+              </li>
+            </ul>
+          </div>
+        )}
+
+        <Button size="lg" onClick={onOpenProfile} className="gap-2">
+          <Store className="h-4 w-4" />
+          {hasFullCredentials ? "Перейти в раздел «Магазин»" : "Подключить магазин"}
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          Ключи хранятся только в вашем браузере и не передаются третьим лицам
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function SupplyView({
   stores,
   activeStore,
@@ -1740,6 +1806,26 @@ function SupplyView({
 }) {
   const draftCandidates = result?.draft_candidates ?? [];
   const visibleClusters = draftCandidates.filter((candidate) => candidate.can_create !== false).slice(0, 3);
+  const isStoreConnected = hasFullCredentials && connectionStatus.type === "success";
+
+  // Магазин не подключён — показываем приглашение, а не формы
+  if (!isStoreConnected) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h1 className="text-4xl font-semibold tracking-normal">Поставка</h1>
+          <p className="mt-2 max-w-3xl text-lg text-muted-foreground">
+            Выберите магазин, загрузите Excel, создайте черновики в Ozon и переходите к поиску слота.
+          </p>
+        </div>
+        <ConnectStorePrompt
+          hasFullCredentials={hasFullCredentials}
+          connectionStatus={connectionStatus}
+          onOpenProfile={onOpenProfile}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -3220,6 +3306,7 @@ function SlotHunterView({
   job,
   error,
   hasFullCredentials,
+  connectionStatus,
   isStarting,
   isStopping,
   onStart,
@@ -3232,6 +3319,7 @@ function SlotHunterView({
   job: SlotHunterJob | null;
   error: string | null;
   hasFullCredentials: boolean;
+  connectionStatus: ConnectionStatus;
   isStarting: boolean;
   isStopping: boolean;
   onStart: (settings: {
@@ -3327,6 +3415,26 @@ function SlotHunterView({
       ...current,
       [warehouse]: value,
     }));
+  }
+
+  const isStoreConnected = hasFullCredentials && connectionStatus.type === "success";
+
+  if (!isStoreConnected) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h1 className="text-4xl font-semibold tracking-normal">Охотник на слоты</h1>
+          <p className="mt-2 max-w-3xl text-lg text-muted-foreground">
+            FBOly проверяет доступные окна и бронирует подходящий слот по готовым черновикам.
+          </p>
+        </div>
+        <ConnectStorePrompt
+          hasFullCredentials={hasFullCredentials}
+          connectionStatus={connectionStatus}
+          onOpenProfile={onOpenProfile}
+        />
+      </div>
+    );
   }
 
   return (
