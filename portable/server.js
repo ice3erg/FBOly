@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-23-draft-spacing-no-429";
+const APP_VERSION = "2026-06-23-macrolocal-id-priority";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1533,7 +1533,9 @@ class OzonClient {
   async resolveSelectedClusterWarehouses(draftId, candidate = {}) {
     const cachedDraftWarehouses = normalizeSelectedClusterWarehouses(candidate.selected_cluster_warehouses)
       .filter((item) => candidate.selected_cluster_warehouses_source === "draft_info" || item.source === "draft_info");
-    if (cachedDraftWarehouses.length) {
+    // Используем кэш только если в нём есть настоящий macrolocal_cluster_id (>= 1000)
+    const cacheHasMacrolocal = cachedDraftWarehouses.some((item) => item.cluster_id && Number(item.cluster_id) >= 1000);
+    if (cachedDraftWarehouses.length && cacheHasMacrolocal) {
       return cachedDraftWarehouses.slice(0, 20);
     }
 
@@ -1567,9 +1569,8 @@ class OzonClient {
         "Нажмите «Загрузить города Ozon», заново создайте поставку и запустите охотника.",
       );
     }
-    // v2 требует macrolocal_cluster_id > 0. Если его нет — черновик создан старым
-    // способом или без расчёта складов. Просим пересоздать поставку.
-    const hasMacrolocalCluster = selectedWarehouses.some((item) => item.cluster_id);
+    // v2 требует macrolocal_cluster_id > 0 (и это большой id >= 1000, не classic).
+    const hasMacrolocalCluster = selectedWarehouses.some((item) => item.cluster_id && Number(item.cluster_id) >= 1000);
     if (!hasMacrolocalCluster) {
       throw Object.assign(
         new Error(
@@ -2156,7 +2157,7 @@ function normalizeSelectedClusterWarehouses(items) {
 }
 
 function buildSelectedClusterWarehousesFromIds(clusterIds, warehouseIds) {
-  const clusters = normalizePositiveOzonIds(clusterIds).slice(0, 20);
+  const clusters = preferMacrolocalClusterIds(clusterIds).slice(0, 20);
   const warehouses = normalizePositiveOzonIds(warehouseIds).slice(0, 20);
   if (!warehouses.length) return [];
   const result = [];
@@ -2319,15 +2320,18 @@ function extractSelectedClusterWarehousesFromDraftInfo(data, fallbackClusterIds 
       ? data.result.clusters
       : [];
   const result = [];
+  const normalizedFallback = preferMacrolocalClusterIds(fallbackClusterIds || []);
   for (const cluster of clusters) {
-    const clusterIds = normalizePositiveOzonIds([
-      ...extractTopLevelClusterIds(cluster),
-      ...(fallbackClusterIds || []),
-    ]);
+    // Берём ТОЛЬКО настоящий macrolocal_cluster_id (не cluster.id — это внутренний
+    // идентификатор ответа, который Ozon не принимает как MacrolocalClusterId).
+    const realClusterIds = preferMacrolocalClusterIds(extractClusterIds(cluster));
+    // Приоритет: macrolocal из черновика → fallback из кандидата (cluster_ids)
+    const clusterIds = realClusterIds.length ? realClusterIds : normalizedFallback;
     const warehouses = Array.isArray(cluster.warehouses) ? cluster.warehouses : [];
     for (const warehouse of warehouses) {
       if (!isDraftWarehouseAvailable(warehouse)) continue;
       const warehouseIds = extractWarehouseIds(warehouse);
+      // Каждый склад привязываем к macrolocal_cluster_id кластера (обязательно > 0)
       result.push(...buildSelectedClusterWarehousesFromIds(clusterIds.slice(0, 1), warehouseIds));
       if (result.length >= 20) return normalizeSelectedClusterWarehouses(result);
     }
@@ -4715,6 +4719,14 @@ function normalizePositiveOzonIds(values) {
     if (id) ids.push(String(id));
   }
   return uniqueStrings(ids).map((value) => Number(value));
+}
+
+// Macrolocal cluster id у Ozon — это большие id (>= 1000). Classic — маленькие (< 1000).
+// Для v2 /draft/timeslot/info и /draft/supply/create нужен именно macrolocal.
+function preferMacrolocalClusterIds(values) {
+  const all = normalizePositiveOzonIds(values);
+  const macrolocal = all.filter((id) => id >= 1000);
+  return macrolocal.length ? macrolocal : all;
 }
 
 function normalizeClassicDraftClusterIds(values) {
