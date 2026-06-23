@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-23-macrolocal-cluster-required";
+const APP_VERSION = "2026-06-23-noginsk-moscow-cluster";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -32,7 +32,7 @@ const DEFAULT_WAREHOUSES = [
   { name: "Казань", percentage: 20 },
 ];
 const NEW_PRODUCT_MAJOR_WAREHOUSES = [
-  { key: "moscow", name: "Москва, МО и Дальние регионы", weight: 35, pattern: /(моск|мо\b|м\.о|хоруг|пушки|жук|домод|централ|москов)/i },
+  { key: "moscow", name: "Москва, МО и Дальние регионы", weight: 35, pattern: /(моск|мо\b|м\.о|хоруг|пушки|жук|домод|ногин|электростал|чехов|подольск|раменск|коледино|тула|калуг|рязан|владимир|иванов|костром|смолен|брянск|орёл|орел|центр|москов)/i },
   { key: "spb", name: "Санкт-Петербург и СЗО", weight: 25, pattern: /(санкт|спб|питер|ленинград|сзо|шушар|бугр|парнас|северо)/i },
   { key: "kazan", name: "Казань", weight: 15, pattern: /(казан|татар|поволж|приволж)/i },
   { key: "rostov", name: "Ростов", weight: 10, pattern: /(ростов|южн)/i },
@@ -41,7 +41,7 @@ const NEW_PRODUCT_MAJOR_WAREHOUSES = [
 ];
 const CITY_CLUSTER_RULES = [
   { name: "Дальний Восток", pattern: /(дальн.*вост|владивосток|хабаров|благовещен|сахалин|якут|камчат|уссур)/i },
-  { name: "Москва, МО и Дальние регионы", pattern: /(моск|мо\b|м\.о|московск|хоруг|пушки|жук|домод|давид|петровск|томилино|софьино|гривно|централ|хаб_мск|мск)/i },
+  { name: "Москва, МО и Дальние регионы", pattern: /(моск|мо\b|м\.о|московск|хоруг|пушки|жук|домод|давид|петровск|томилино|софьино|гривно|ногин|электростал|чехов|подольск|раменск|коледино|тула|калуг|рязан|владимир|иванов|костром|смолен|брянск|центр|хаб_мск|мск)/i },
   { name: "Тверь", pattern: /(твер)/i },
   { name: "Ярославль", pattern: /(ярослав)/i },
   { name: "Санкт-Петербург и СЗО", pattern: /(санкт|спб|питер|ленинград|сзо|шушар|бугр|парнас|волхон|колпино|порошкино|московское|северо)/i },
@@ -2929,7 +2929,7 @@ function getKnownClusterAlias(text) {
     || compact === "мо"
     || text === "московская область"
     || /московск.*област/i.test(text)
-    || /(^|[\s_-])(гривно|хоругвино|пушкино|домодедово|жуковск|давыдов|петровск|томилино|софьино)([\s_-]|$)/i.test(text)
+    || /(^|[\s_-])(гривно|хоругвино|пушкино|домодедово|жуковск|давыдов|петровск|томилино|софьино|ногинск|электросталь|чехов|подольск|раменское|коледино)([\s_-]|$)/i.test(text)
   ) {
     return NEW_PRODUCT_MAJOR_WAREHOUSES[0].name;
   }
