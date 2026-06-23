@@ -3105,8 +3105,8 @@ function DraftCreationPanel({
                     {item.ok ? (
                       <div className="mt-1 space-y-1 text-xs text-muted-foreground">
                         <div>
-                          {item.draft_id ? `draft_id: ${item.draft_id}` : `operation_id: ${item.operation_id}`}
-                          {item.status ? `, статус: ${item.status}` : ""}
+                          {item.draft_id ? "Черновик создан в Ozon" : item.operation_id ? "Запрос принят Ozon" : ""}
+                          {item.status ? ` · статус: ${item.status}` : ""}
                         </div>
                         {item.attempts_count && (
                           <div>Попыток backend: {item.attempts_count}</div>
@@ -3379,63 +3379,7 @@ function SlotHunterView({
                 />
               </label>
 
-              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border p-3">
-                <span>
-                  <span className="block text-sm font-medium">
-                    Умная частота
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    Пауза при лимитах Ozon, приоритетные города проверяются первыми.
-                  </span>
-                </span>
-                <input
-                  type="checkbox"
-                  checked={smartSpeed}
-                  onChange={(event) => setSmartSpeed(event.target.checked)}
-                  className="h-4 w-4 rounded border-input"
-                />
-              </label>
 
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="slot-interval">Интервал</Label>
-                  <Input
-                    id="slot-interval"
-                    type="number"
-                    min={90}
-                    step={30}
-                    value={intervalSeconds}
-                    onChange={(event) => setIntervalSeconds(Number(event.target.value) || 180)}
-                  />
-                  <div className="text-xs text-muted-foreground">секунд</div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="slot-max">Искать до</Label>
-                  <Input
-                    id="slot-max"
-                    type="number"
-                    min={5}
-                    step={30}
-                    value={maxMinutes}
-                    onChange={(event) => setMaxMinutes(Number(event.target.value) || 240)}
-                  />
-                  <div className="text-xs text-muted-foreground">минут</div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="slot-concurrency">Параллельно</Label>
-                  <Input
-                    id="slot-concurrency"
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={concurrencyLimit}
-                    onChange={(event) =>
-                      setConcurrencyLimit(Number(event.target.value) || 1)
-                    }
-                  />
-                  <div className="text-xs text-muted-foreground">волной</div>
-                </div>
-              </div>
 
               <div className="space-y-3 rounded-lg border p-3">
                 <div>
@@ -3553,7 +3497,6 @@ function SlotHunterView({
                                 </span>
                                 <span className="block text-xs text-muted-foreground">
                                   {candidate.rows_count} SKU, {candidate.total_quantity} шт.
-                                  {candidate.draft_id ? ` · draft_id ${candidate.draft_id}` : ""}
                                 </span>
                               </span>
                             </label>
@@ -3653,16 +3596,14 @@ function SlotHunterView({
                   <InfoLine label="Найдено" value={String(job.summary.found)} />
                   <InfoLine label="В поиске" value={String(job.summary.searching)} />
                   <InfoLine label="Ошибки" value={String(job.summary.failed)} />
-                  <InfoLine label="С draft_id" value={String(job.summary.with_draft ?? 0)} />
-                  <InfoLine label="Приоритет" value={String(job.summary.priority ?? 0)} />
                 </div>
                 <div className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
                   Следующая попытка: {job.next_attempt_at ? formatDate(job.next_attempt_at) : "-"}
                   {job.rate_limited_until
-                    ? ` · лимит до ${formatDate(job.rate_limited_until)}`
+                    ? ` · ждём ответ Ozon, повторим автоматически`
                     : ""}
                   {job.draft_phase_until
-                    ? ` · после черновика до ${formatDate(job.draft_phase_until)}`
+                    ? ` · ожидаем готовности черновика`
                     : ""}
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -3719,14 +3660,9 @@ function SlotHunterView({
                       </div>
                       <div className="mt-3 space-y-1 text-xs text-muted-foreground">
                         <div>Попыток: {target.attempts_count}</div>
-                        <div>Очередь: {target.priority}</div>
                         <div>{target.last_message || "Ожидает попытки"}</div>
-                        {target.draft_id && <div>draft_id: {target.draft_id}</div>}
-                        {target.supply_operation_id && (
-                          <div>operation_id: {target.supply_operation_id}</div>
-                        )}
                         {target.supply_order_id && (
-                          <div>заявка: {target.supply_order_id}</div>
+                          <div className="font-medium text-green-400">✓ Заявка создана: {target.supply_order_id}</div>
                         )}
                         {target.error_message && (
                           <div className="text-destructive">{target.error_message}</div>
@@ -3744,8 +3680,8 @@ function SlotHunterView({
                         {candidate.rows_count} SKU, {candidate.total_quantity} шт.
                       </div>
                       {candidate.draft_id && (
-                        <div className="mt-2 text-xs text-muted-foreground">
-                          готовый draft_id: {candidate.draft_id}
+                        <div className="mt-2 text-xs text-green-400">
+                          ✓ Черновик готов
                         </div>
                       )}
                     </div>
