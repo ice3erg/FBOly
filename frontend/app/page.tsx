@@ -297,12 +297,10 @@ type ConnectionStatus =
   | { type: "error"; message: string };
 
 type AppView =
-  | "overview"
   | "supply"
   | "slotHunter"
   | "history"
-  | "profile"
-  | "settings";
+  | "profile";
 
 const DEFAULT_WAREHOUSES: WarehousePercentage[] = [
   { name: "Москва", percentage: 35 },
@@ -1263,16 +1261,6 @@ export default function Home() {
         </aside>
 
         <section className="min-w-0 px-4 py-5 lg:px-8 lg:py-6">
-          {activeView === "overview" && (
-            <OverviewView
-              user={user}
-              history={history}
-              result={result}
-              connectionStatus={connectionStatus}
-              onNewSupply={() => setActiveView("supply")}
-              onProfile={() => setActiveView("profile")}
-            />
-          )}
           {activeView === "supply" && (
             <SupplyView
               stores={stores}
@@ -1327,13 +1315,11 @@ export default function Home() {
           {activeView === "history" && <HistoryView history={history} />}
           {activeView === "profile" && (
             <ProfileView
-              user={user}
               stores={stores}
               activeStoreId={activeStoreId}
               rememberCredentials={rememberCredentials}
               showApiKey={showApiKey}
               isCheckingConnection={isCheckingConnection}
-              onUserChange={handleAuth}
               onRememberChange={handleRememberChange}
               onShowApiKeyChange={() => setShowApiKey((current) => !current)}
               onAddStore={addStore}
@@ -1377,298 +1363,6 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
         {!compact && (
           <div className="mt-1 text-sm text-muted-foreground">{APP_TAGLINE}</div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function PublicEntry({ onAuth }: { onAuth: (user: AppUser) => void }) {
-  const [mode, setMode] = useState<"login" | "register">("register");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const steps = [
-    "Подключите магазин Ozon во вкладке Магазин",
-    "Загрузите Excel с товарами и количеством",
-    "Создайте черновики и запустите охотника на слоты",
-  ];
-
-  function openDashboard() {
-    onAuth({
-      name: name.trim() || "Пользователь",
-      email: email.trim() || "seller@example.ru",
-      organization: "Мой магазин Ozon",
-    });
-  }
-
-  function submitAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    openDashboard();
-  }
-
-  return (
-    <main className="min-h-screen px-4 py-4 text-white sm:px-6 lg:px-8">
-      <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-[1600px] flex-col">
-        <header className="flex items-center justify-between border-b border-white/[0.08] pb-4">
-          <BrandMark compact />
-          <button
-            type="button"
-            onClick={openDashboard}
-            className="group inline-flex items-center gap-2 rounded-lg border border-white/[0.10] bg-white/[0.035] px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-primary/45 hover:bg-primary/10 hover:text-white"
-          >
-            Открыть кабинет
-            <ArrowRight className="h-4 w-4 text-primary transition group-hover:translate-x-0.5" />
-          </button>
-        </header>
-
-        <div className="grid flex-1 items-center gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_560px] lg:gap-14">
-          <section className="mx-auto w-full max-w-[660px] lg:mx-0 lg:pl-16 xl:pl-28">
-            <div className="flex flex-col gap-7">
-              <div className="inline-flex w-fit items-center gap-3 rounded-full border border-primary/20 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary">
-                <Sparkles className="h-4 w-4" />
-                {APP_TAGLINE}
-              </div>
-              <div className="flex items-center gap-5">
-                <LogoIcon className="h-24 w-24 sm:h-28 sm:w-28" />
-                <div className="text-6xl font-semibold leading-none sm:text-7xl">
-                  FBO<span className="text-primary">ly</span>
-                </div>
-              </div>
-              <div>
-                <h1 className="max-w-2xl text-4xl font-semibold leading-[1.05] text-white sm:text-5xl">
-                  Автоматизация поставок Ozon FBO без ручной рутины
-                </h1>
-                <p className="mt-5 max-w-xl text-lg leading-8 text-zinc-400">
-                  FBOly распределяет товары по кластерам, готовит Excel-файлы, создаёт черновики Ozon и помогает поймать подходящий слот.
-                </p>
-              </div>
-              <div className="space-y-4">
-                {steps.map((step) => (
-                  <div key={step} className="flex items-center gap-4 text-base text-zinc-200 sm:text-lg">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-full border border-primary/35 bg-primary/20 text-white shadow-[0_0_24px_rgba(124,58,237,0.20)]">
-                      <CheckCircle2 className="h-5 w-5" />
-                    </div>
-                    {step}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          <Card className="relative overflow-hidden border-primary/25 bg-[#0b0b14]/82 shadow-[0_0_70px_rgba(124,58,237,0.14)]">
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary to-transparent" />
-            <CardHeader className="p-7 pb-3 sm:p-8 sm:pb-4">
-              <CardTitle className="text-3xl sm:text-4xl">
-                {mode === "register" ? "Начать работу" : "Войти в FBOly"}
-              </CardTitle>
-              <CardDescription className="mt-4 text-base leading-7 sm:text-lg">
-                {mode === "register"
-                  ? "Сейчас это MVP-кабинет: откроем сервис сразу, а магазин Ozon подключается внутри профиля."
-                  : "Для тестового запуска можно сразу открыть кабинет. Реальную авторизацию подключим перед запуском подписок."}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-7 pt-4 sm:p-8 sm:pt-4">
-              <form className="space-y-4" onSubmit={submitAuth}>
-                {mode === "register" && (
-                  <div className="space-y-2">
-                    <Label htmlFor="public-name">Имя</Label>
-                    <Input
-                      id="public-name"
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                      placeholder="Введите ваше имя"
-                      autoComplete="name"
-                      className="h-12 text-base"
-                    />
-                  </div>
-                )}
-                <div className="space-y-2">
-                  <Label htmlFor="public-email">Email</Label>
-                  <Input
-                    id="public-email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    placeholder="Введите email"
-                    autoComplete="email"
-                    className="h-12 text-base"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="public-password">Пароль</Label>
-                  <Input
-                    id="public-password"
-                    type="password"
-                    placeholder="Введите пароль"
-                    autoComplete={mode === "register" ? "new-password" : "current-password"}
-                    className="h-12 text-base"
-                  />
-                </div>
-                {mode === "register" && (
-                  <label className="flex cursor-pointer items-center gap-3 text-sm text-zinc-200">
-                    <input
-                      type="checkbox"
-                      defaultChecked
-                      className="h-5 w-5 rounded border-input accent-[#8B5CF6]"
-                    />
-                    <span>
-                      Согласен с{" "}
-                      <span className="text-primary">условиями сервиса</span>
-                    </span>
-                  </label>
-                )}
-                <Button type="submit" size="lg" className="h-14 w-full gap-2 text-base">
-                  {mode === "register" ? (
-                    <UserPlus className="h-5 w-5" />
-                  ) : (
-                    <LockKeyhole className="h-5 w-5" />
-                  )}
-                  {mode === "register" ? "Открыть кабинет" : "Войти в кабинет"}
-                </Button>
-              </form>
-              <div className="mt-5 text-center text-sm text-muted-foreground">
-                {mode === "register" ? "Уже есть аккаунт?" : "Ещё нет аккаунта?"}{" "}
-                <button
-                  type="button"
-                  onClick={() => setMode(mode === "register" ? "login" : "register")}
-                  className="font-medium text-primary hover:text-secondary"
-                >
-                  {mode === "register" ? "Войти" : "Зарегистрироваться"}
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={openDashboard}
-                className="mx-auto mt-4 flex items-center justify-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
-              >
-                Пропустить и перейти в сервис
-                <ArrowRight className="h-4 w-4 text-primary" />
-              </button>
-              <div className="mt-5 flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                <ShieldCheck className="h-4 w-4" />
-                Ключи Ozon вводятся только во вкладке Магазин.
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </main>
-  );
-}
-
-function OverviewView({
-  user,
-  history,
-  result,
-  connectionStatus,
-  onNewSupply,
-  onProfile,
-}: {
-  user: AppUser;
-  history: HistoryRecord[];
-  result: ProcessResponse | null;
-  connectionStatus: ConnectionStatus;
-  onNewSupply: () => void;
-  onProfile: () => void;
-}) {
-  const lastRecord = history[0];
-  const readinessItems = [
-    { label: "Регистрация и кабинет", done: true },
-    { label: "Магазин подключён", done: connectionStatus.type === "success" },
-    { label: "Excel обработка", done: true },
-    { label: "История", done: history.length > 0 },
-    { label: "Охотник на слоты", done: Boolean(result?.draft_candidates?.length) },
-    { label: "Подписки", done: false },
-  ];
-  return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <CardTitle className="text-2xl">Добрый день, {user.name}</CardTitle>
-            <CardDescription>
-              Кабинет готовит файлы поставки и хранит последние обработки.
-            </CardDescription>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={onNewSupply} className="gap-2">
-              <Upload className="h-4 w-4" />
-              Загрузить Excel
-            </Button>
-            <Button type="button" variant="outline" onClick={onProfile} className="gap-2">
-              <Store className="h-4 w-4" />
-              Магазин
-            </Button>
-          </div>
-        </CardHeader>
-      </Card>
-
-      <div className="grid gap-5 md:grid-cols-4">
-        <MetricCard
-          icon={Activity}
-          label="Обработок"
-          value={String(history.length)}
-          hint="за текущий браузер"
-        />
-        <MetricCard
-          icon={FileSpreadsheet}
-          label="Последний итог"
-          value={lastRecord ? `${lastRecord.totalQuantity}` : "0"}
-          hint="штук в поставке"
-        />
-        <MetricCard
-          icon={Archive}
-          label="Файлов"
-          value={lastRecord ? String(lastRecord.files) : "0"}
-          hint="в последнем ZIP"
-        />
-        <MetricCard
-          icon={PlugZap}
-          label="Ozon"
-          value={connectionStatus.type === "success" ? "OK" : "нет"}
-          hint="статус API"
-        />
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Последняя поставка</CardTitle>
-            <CardDescription>
-              {lastRecord
-                ? `${lastRecord.fileName}, ${formatDate(lastRecord.createdAt)}`
-                : "Загрузите первый Excel-файл"}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {result ? (
-              <ResultSummary result={result} />
-            ) : (
-              <EmptyState
-                icon={Upload}
-                title="Поставка ещё не рассчитана"
-                text="Откройте раздел «Поставка» и загрузите Excel."
-              />
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Готовность сервиса</CardTitle>
-            <CardDescription>Что уже можно использовать</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {readinessItems.map(({ label, done }) => (
-              <div key={label} className="flex items-center justify-between">
-                <span className="text-sm">{label}</span>
-                {done ? (
-                  <CheckCircle2 className="h-4 w-4 text-secondary" />
-                ) : (
-                  <XCircle className="h-4 w-4 text-muted-foreground" />
-                )}
-              </div>
-            ))}
-          </CardContent>
-        </Card>
       </div>
     </div>
   );
@@ -1804,8 +1498,6 @@ function SupplyView({
   onSearchCrossdockPoints: (search: string) => Promise<CrossdockPoint[]>;
   onOpenSlotHunter: () => void;
 }) {
-  const draftCandidates = result?.draft_candidates ?? [];
-  const visibleClusters = draftCandidates.filter((candidate) => candidate.can_create !== false).slice(0, 3);
   const isStoreConnected = hasFullCredentials && connectionStatus.type === "success";
 
   // Магазин не подключён — показываем приглашение, а не формы
@@ -1950,27 +1642,6 @@ function SupplyView({
             <div className="rounded-lg border border-primary/25 bg-primary/10 p-4 text-sm leading-relaxed text-purple-100">
               {buildDistributionExplanation(result)}
             </div>
-            {visibleClusters.length > 0 && (
-              <div className="space-y-2">
-                <div className="text-sm font-medium">Кластеры для поставки</div>
-                <div className="overflow-hidden rounded-lg border border-white/[0.08]">
-                  {visibleClusters.map((candidate) => (
-                    <div
-                      key={candidate.warehouse}
-                      className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3 last:border-b-0"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">{candidate.warehouse}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {candidate.rows_count} SKU · {candidate.total_quantity} шт.
-                        </div>
-                      </div>
-                      <Badge variant="secondary">готов</Badge>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </CardContent>
         </Card>
       )}
@@ -2199,13 +1870,11 @@ function StoreSelectorCard({
 }
 
 function ProfileView({
-  user,
   stores,
   activeStoreId,
   rememberCredentials,
   showApiKey,
   isCheckingConnection,
-  onUserChange,
   onRememberChange,
   onShowApiKeyChange,
   onAddStore,
@@ -2213,13 +1882,11 @@ function ProfileView({
   onUpdateStore,
   onCheckStore,
 }: {
-  user: AppUser;
   stores: OzonStore[];
   activeStoreId: string | null;
   rememberCredentials: boolean;
   showApiKey: boolean;
   isCheckingConnection: boolean;
-  onUserChange: (user: AppUser) => void;
   onRememberChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onShowApiKeyChange: () => void;
   onAddStore: () => void;
@@ -2227,15 +1894,6 @@ function ProfileView({
   onUpdateStore: (storeId: string, patch: Partial<OzonStore>) => void;
   onCheckStore: (storeId: string) => void;
 }) {
-  const [name, setName] = useState(user.name);
-  const [email, setEmail] = useState(user.email);
-  const [organization, setOrganization] = useState(user.organization);
-
-  function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    onUserChange({ name, email, organization });
-  }
-
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
       <section className="space-y-5">
@@ -2436,44 +2094,6 @@ function ProfileView({
       <aside className="space-y-5">
         <Card>
           <CardHeader>
-            <CardTitle>Аккаунт</CardTitle>
-            <CardDescription>Данные рабочего пространства</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="space-y-4" onSubmit={save}>
-              <div className="space-y-2">
-                <Label htmlFor="profile-name">Имя</Label>
-                <Input
-                  id="profile-name"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="profile-email">Email</Label>
-                <Input
-                  id="profile-email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="profile-organization">Компания</Label>
-                <Input
-                  id="profile-organization"
-                  value={organization}
-                  onChange={(event) => setOrganization(event.target.value)}
-                />
-              </div>
-              <Button type="submit" className="w-full">
-                Сохранить профиль
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardTitle>Какие роли нужны</CardTitle>
             <CardDescription>Минимум для комфортной работы</CardDescription>
           </CardHeader>
@@ -2486,182 +2106,6 @@ function ProfileView({
         </Card>
       </aside>
     </div>
-  );
-}
-
-function OzonView({
-  clientId,
-  apiKey,
-  showApiKey,
-  rememberCredentials,
-  connectionStatus,
-  isCheckingConnection,
-  hasFullCredentials,
-  onClientIdChange,
-  onApiKeyChange,
-  onRememberChange,
-  onShowApiKeyChange,
-  onCheckConnection,
-}: {
-  clientId: string;
-  apiKey: string;
-  showApiKey: boolean;
-  rememberCredentials: boolean;
-  connectionStatus: ConnectionStatus;
-  isCheckingConnection: boolean;
-  hasFullCredentials: boolean;
-  onClientIdChange: (value: string) => void;
-  onApiKeyChange: (value: string) => void;
-  onRememberChange: (event: ChangeEvent<HTMLInputElement>) => void;
-  onShowApiKeyChange: () => void;
-  onCheckConnection: () => void;
-}) {
-  return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <OzonAccessCard
-        clientId={clientId}
-        apiKey={apiKey}
-        rememberCredentials={rememberCredentials}
-        showApiKey={showApiKey}
-        connectionStatus={connectionStatus}
-        isCheckingConnection={isCheckingConnection}
-        hasFullCredentials={hasFullCredentials}
-        onClientIdChange={onClientIdChange}
-        onApiKeyChange={onApiKeyChange}
-        onRememberChange={onRememberChange}
-        onShowApiKeyChange={onShowApiKeyChange}
-        onCheckConnection={onCheckConnection}
-      />
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Роли API</CardTitle>
-          <CardDescription>Что выбрать в Ozon Seller</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <RoleLine name="Admin read only" value="расчёт и аналитика" />
-          <RoleLine name="Supply order" value="черновики поставок" />
-          <RoleLine name="Warehouse" value="склады и кластеры" />
-          <RoleLine name="Report" value="отчёты и аналитика" />
-          <div className="rounded-lg border bg-muted/40 p-3 text-muted-foreground">
-            В production ключи будут храниться на backend в зашифрованном виде.
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function OzonAccessCard({
-  clientId,
-  apiKey,
-  rememberCredentials,
-  showApiKey,
-  connectionStatus,
-  isCheckingConnection,
-  hasFullCredentials,
-  onClientIdChange,
-  onApiKeyChange,
-  onRememberChange,
-  onShowApiKeyChange,
-  onCheckConnection,
-}: {
-  clientId: string;
-  apiKey: string;
-  rememberCredentials: boolean;
-  showApiKey: boolean;
-  connectionStatus: ConnectionStatus;
-  isCheckingConnection: boolean;
-  hasFullCredentials: boolean;
-  onClientIdChange: (value: string) => void;
-  onApiKeyChange: (value: string) => void;
-  onRememberChange: (event: ChangeEvent<HTMLInputElement>) => void;
-  onShowApiKeyChange: () => void;
-  onCheckConnection: () => void;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <KeyRound className="h-5 w-5 text-primary" />
-          Ozon API
-        </CardTitle>
-        <CardDescription>Client-Id и Api-Key кабинета продавца</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4 p-5">
-        <div className="space-y-2">
-          <Label htmlFor="client-id">Client-Id</Label>
-          <Input
-            id="client-id"
-            value={clientId}
-            onChange={(event) => onClientIdChange(event.target.value)}
-            placeholder="1356873"
-            autoComplete="off"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="api-key">Api-Key</Label>
-          <div className="flex gap-2">
-            <Input
-              id="api-key"
-              value={apiKey}
-              onChange={(event) => onApiKeyChange(event.target.value)}
-              type={showApiKey ? "text" : "password"}
-              placeholder="cb1..."
-              autoComplete="off"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={onShowApiKeyChange}
-              aria-label={showApiKey ? "Скрыть Api-Key" : "Показать Api-Key"}
-            >
-              {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </Button>
-          </div>
-        </div>
-
-        <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={rememberCredentials}
-            onChange={onRememberChange}
-            className="h-4 w-4 rounded border-input"
-          />
-          Сохранить ключи для этого браузера
-        </label>
-
-        <div
-          className={cn(
-            "rounded-lg border p-3 text-sm",
-            connectionStatus.type === "success" &&
-              "border-secondary/30 bg-secondary/10 text-secondary",
-            connectionStatus.type === "error" &&
-              "border-destructive/30 bg-destructive/10 text-destructive",
-            connectionStatus.type === "idle" && "bg-muted/40 text-muted-foreground",
-          )}
-        >
-          {connectionStatus.message}
-        </div>
-
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onCheckConnection}
-          disabled={isCheckingConnection || !hasFullCredentials}
-          className="w-full gap-2"
-        >
-          {isCheckingConnection ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <ShieldCheck className="h-4 w-4" />
-          )}
-          Проверить подключение
-        </Button>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -2704,65 +2148,6 @@ function ResultPanel({
         />
       )}
 
-      <Card>
-        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <CardTitle>Excel-файлы</CardTitle>
-            <CardDescription>
-              Можно скачать для ручной загрузки или проверки распределения.
-            </CardDescription>
-          </div>
-          <Button
-            type="button"
-            onClick={onDownloadZip}
-            disabled={!canDownloadZip || isZipping}
-            className="gap-2"
-          >
-            {isZipping ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <FileArchive className="h-4 w-4" />
-            )}
-            Скачать ZIP
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {result.distribution_note && (
-            <details className="mb-4 rounded-lg border border-white/[0.08] bg-white/[0.035] p-3 text-sm text-muted-foreground">
-              <summary className="cursor-pointer font-medium text-foreground">
-                Что учёл FBOly при расчёте
-              </summary>
-              <div className="mt-2 leading-relaxed">{result.distribution_note}</div>
-            </details>
-          )}
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {result.files.map((file) => (
-              <div key={file.filename} className="rounded-lg border p-4">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <CheckCircle2 className="h-4 w-4 text-secondary" />
-                  <span className="min-w-0 truncate">{file.warehouse}</span>
-                </div>
-                <div className="mt-3 space-y-1 text-sm text-muted-foreground">
-                  <div>{file.rows_count} строк</div>
-                  <div>{file.total_quantity} шт.</div>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onDownloadSingleFile(file)}
-                  disabled={!file.content_base64}
-                  className="mt-4 w-full gap-2"
-                >
-                  <FileSpreadsheet className="h-4 w-4" />
-                  XLSX
-                </Button>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
       {result.errors.length > 0 && (
         <Card>
           <CardHeader>
@@ -2795,42 +2180,60 @@ function ResultPanel({
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Найденные товары</CardTitle>
-          <CardDescription>Итоговая сумма: {result.total_output_quantity} шт.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[620px] text-left text-sm">
-              <thead className="bg-muted text-xs font-medium">
-                <tr>
-                  <th className="px-3 py-2">строка</th>
-                  <th className="px-3 py-2">артикул</th>
-                  <th className="px-3 py-2">имя</th>
-                  <th className="px-3 py-2">количество</th>
-                  <th className="px-3 py-2">источник</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.resolved_items.map((item) => (
-                  <tr key={`${item.row_number}-${item.offer_id}`} className="border-t">
-                    <td className="px-3 py-2">{item.row_number}</td>
-                    <td className="px-3 py-2 font-medium">{item.offer_id}</td>
-                    <td className="max-w-[260px] truncate px-3 py-2">
-                      {item.name ?? "-"}
-                    </td>
-                    <td className="px-3 py-2">{item.quantity}</td>
-                    <td className="px-3 py-2">
-                      <Badge variant="outline">{item.source}</Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <details className="rounded-lg border border-white/[0.08] bg-white/[0.035] p-4 text-sm">
+        <summary className="cursor-pointer list-none font-medium">
+          Дополнительно: ручные Excel-файлы
+        </summary>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Обычно не нужны — FBOly создаёт черновики напрямую через Ozon API. Файлы пригодятся, только если хотите загрузить поставку вручную.
+        </p>
+        {result.distribution_note && (
+          <div className="mt-3 rounded-lg border border-white/[0.08] bg-white/[0.02] p-3 text-sm text-muted-foreground leading-relaxed">
+            {result.distribution_note}
           </div>
-        </CardContent>
-      </Card>
+        )}
+        <div className="mt-4 flex justify-end">
+          <Button
+            type="button"
+            onClick={onDownloadZip}
+            disabled={!canDownloadZip || isZipping}
+            variant="outline"
+            className="gap-2"
+          >
+            {isZipping ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <FileArchive className="h-4 w-4" />
+            )}
+            Скачать все одним ZIP
+          </Button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {result.files.map((file) => (
+            <div key={file.filename} className="rounded-lg border p-4">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <CheckCircle2 className="h-4 w-4 text-secondary" />
+                <span className="min-w-0 truncate">{file.warehouse}</span>
+              </div>
+              <div className="mt-3 space-y-1 text-sm text-muted-foreground">
+                <div>{file.rows_count} строк</div>
+                <div>{file.total_quantity} шт.</div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onDownloadSingleFile(file)}
+                disabled={!file.content_base64}
+                className="mt-4 w-full gap-2"
+              >
+                <FileSpreadsheet className="h-4 w-4" />
+                XLSX
+              </Button>
+            </div>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }
@@ -3933,86 +3336,6 @@ function HistoryView({ history }: { history: HistoryRecord[] }) {
   );
 }
 
-function SettingsView({
-  user,
-  onUserChange,
-}: {
-  user: AppUser;
-  onUserChange: (user: AppUser) => void;
-}) {
-  const [name, setName] = useState(user.name);
-  const [email, setEmail] = useState(user.email);
-  const [organization, setOrganization] = useState(user.organization);
-
-  function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    onUserChange({ name, email, organization });
-  }
-
-  return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <Card>
-        <CardHeader>
-          <CardTitle>Настройки аккаунта</CardTitle>
-          <CardDescription>Профиль и рабочее пространство</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="space-y-4" onSubmit={save}>
-            <div className="space-y-2">
-              <Label htmlFor="settings-name">Имя</Label>
-              <Input
-                id="settings-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="settings-email">Email</Label>
-              <Input
-                id="settings-email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="settings-organization">Компания</Label>
-              <Input
-                id="settings-organization"
-                value={organization}
-                onChange={(event) => setOrganization(event.target.value)}
-              />
-            </div>
-            <Button type="submit">Сохранить</Button>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Production-ready</CardTitle>
-          <CardDescription>Следующие серверные блоки</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <RoleLine name="PostgreSQL" value="пользователи и история" />
-          <RoleLine name="JWT/cookie" value="реальная авторизация" />
-          <RoleLine name="S3" value="хранение ZIP и XLSX" />
-          <RoleLine name="Audit log" value="создание черновиков" />
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function ResultSummary({ result }: { result: ProcessResponse }) {
-  return (
-    <div className="grid gap-3 md:grid-cols-3">
-      <MetricTile label="Найдено" value={String(result.resolved_items.length)} tone="green" />
-      <MetricTile label="Ошибки" value={String(result.errors.length)} tone="amber" />
-      <MetricTile label="Итого" value={`${result.total_output_quantity} шт.`} tone="blue" />
-    </div>
-  );
-}
-
 function buildDistributionExplanation(result: ProcessResponse) {
   const clustersCount = result.files.length;
   const totalQuantity = result.total_output_quantity;
@@ -4090,28 +3413,6 @@ function MetricTile({
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 text-xl font-semibold">{value}</div>
     </div>
-  );
-}
-
-function FeatureCard({
-  icon: Icon,
-  title,
-  text,
-}: {
-  icon: typeof BarChart3;
-  title: string;
-  text: string;
-}) {
-  return (
-    <Card>
-      <CardContent className="p-5">
-        <div className="flex h-10 w-10 items-center justify-center rounded-md bg-secondary/10 text-secondary">
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="mt-4 font-semibold">{title}</div>
-        <div className="mt-2 text-sm text-muted-foreground">{text}</div>
-      </CardContent>
-    </Card>
   );
 }
 
