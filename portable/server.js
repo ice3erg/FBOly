@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-23-classic-v2-fallback";
+const APP_VERSION = "2026-06-23-v2-only-no-dead-v1";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1285,20 +1285,12 @@ class OzonClient {
     throw enrichCrossdockDraftCreateError(attempts);
   }
   async getSupplyDraftInfo(operationId) {
-    try {
-      return await this.post("/v2/draft/create/info", { operation_id: operationId }, {
-        maxRetries: 1,
-        minDelayMs: OZON_DRAFT_REQUEST_DELAY_MS,
-        base429DelayMs: 6000,
-      });
-    } catch (error) {
-      if (!isEndpointFallbackError(error)) throw error;
-      return await this.post("/v1/draft/create/info", { operation_id: operationId }, {
-        maxRetries: 1,
-        minDelayMs: OZON_DRAFT_REQUEST_DELAY_MS,
-        base429DelayMs: 6000,
-      });
-    }
+    // /v1/draft/create/info отключён Ozon 16.03.2026 — только v2
+    return await this.post("/v2/draft/create/info", { operation_id: operationId }, {
+      maxRetries: 1,
+      minDelayMs: OZON_DRAFT_REQUEST_DELAY_MS,
+      base429DelayMs: 6000,
+    });
   }
   async getSupplyDraftInfoByDraftId(draftId) {
     const numericDraftId = toPositiveIntegerId(draftId);
@@ -1443,55 +1435,26 @@ class OzonClient {
       rateLimitCooldownMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
     };
     if (isCrossdockCandidate(candidate)) {
-      const warehouseIds = getCrossdockTimeslotWarehouseIds(candidate).slice(0, 20).map(String);
-      if (!warehouseIds.length) {
-        throw new Error("Для поиска слотов crossdock нужна выбранная точка отгрузки Ozon. Выберите точку кросс-докинга в поставке и заново запустите охотника.");
-      }
-      try {
-        return await this.post("/v1/draft/timeslot/info", {
-          draft_id: numericDraftId || draftId,
-          date_from: toOzonTimestampStartOfDay(dateFrom),
-          date_to: toOzonTimestampEndOfDay(dateTo),
-          warehouse_ids: warehouseIds,
-        }, slotOptions);
-      } catch (error) {
-        if (!isVersionFallbackError(error)) throw error;
-        const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
-        return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", {
-          draft_id: numericDraftId || draftId,
-          date_from: dateFrom,
-          date_to: dateTo,
-          supply_type: resolveSupplyType(candidate),
-        }, selectedWarehouses, slotOptions);
-      }
+      // /v1/draft/timeslot/info отключён Ozon 16.03.2026 — используем только v2
+      const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
+      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", {
+        draft_id: numericDraftId || draftId,
+        date_from: dateFrom,
+        date_to: dateTo,
+        supply_type: resolveSupplyType(candidate),
+      }, selectedWarehouses, slotOptions);
     }
     if (resolveDraftFlow(candidate) === "classic") {
-      const warehouseIds = normalizePositiveOzonIds(candidate.warehouse_ids).slice(0, 20).map(String);
-      try {
-        if (!warehouseIds.length) {
-          throw Object.assign(new Error("classic timeslot: нет warehouse_ids, пробуем v2"), { __forceV2: true });
-        }
-        return await this.post("/v1/draft/timeslot/info", {
-          draft_id: numericDraftId || draftId,
-          date_from: toOzonTimestampStartOfDay(dateFrom),
-          date_to: toOzonTimestampEndOfDay(dateTo),
-          warehouse_ids: warehouseIds,
-        }, slotOptions);
-      } catch (error) {
-        // v1 устарел (obsolete) или нет warehouse_ids — переключаемся на v2 как direct
-        if (error.__forceV2 || isVersionFallbackError(error)) {
-          const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
-          return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", {
-            draft_id: numericDraftId || draftId,
-            date_from: dateFrom,
-            date_to: dateTo,
-            supply_type: resolveSupplyType(candidate),
-          }, selectedWarehouses, slotOptions);
-        }
-        throw error;
-      }
+      // classic flow и /v1/draft/timeslot/info отключены — идём через v2 как direct
+      const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
+      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", {
+        draft_id: numericDraftId || draftId,
+        date_from: dateFrom,
+        date_to: dateTo,
+        supply_type: resolveSupplyType(candidate),
+      }, selectedWarehouses, slotOptions);
     }
-    // Direct: только v2 — v1 устарел для direct-поставок
+    // Direct: только v2
     const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
     const basePayload = {
       draft_id: numericDraftId || draftId,
@@ -1499,93 +1462,10 @@ class OzonClient {
       date_to: dateTo,
       supply_type: resolveSupplyType(candidate),
     };
-    try {
-      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", basePayload, selectedWarehouses, slotOptions);
-    } catch (error) {
-      if (isCrossdockDeliveryFlowError(error)) {
-        candidate.supply_mode = "crossdock";
-        const warehouseIds = getCrossdockTimeslotWarehouseIds(candidate).slice(0, 20).map(String);
-        if (warehouseIds.length) {
-          return await this.post("/v1/draft/timeslot/info", {
-            draft_id: numericDraftId || draftId,
-            date_from: toOzonTimestampStartOfDay(dateFrom),
-            date_to: toOzonTimestampEndOfDay(dateTo),
-            warehouse_ids: warehouseIds,
-          }, slotOptions);
-        }
-      }
-      throw error;
-    }
+    return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", basePayload, selectedWarehouses, slotOptions);
   }
   async createSupplyFromDraft(draftId, selectedSlot, settings = {}, candidate = {}) {
-    if (isCrossdockCandidate(candidate)) {
-      const normalizedSlot = normalizeTimeslotForOzon(selectedSlot);
-      if (!normalizedSlot) {
-        throw new Error(
-          "Ozon вернул слот без полного времени from_in_timezone/to_in_timezone. " +
-          "Автобронь остановлена, чтобы не отправлять пустой таймслот.",
-        );
-      }
-      const warehouseId = extractSlotWarehouseId(selectedSlot)
-        || getCrossdockTimeslotWarehouseIds(candidate).slice(0, 1)[0];
-      if (!warehouseId) {
-        throw new Error("Ozon нашёл crossdock-слот, но не удалось определить warehouse_id точки отгрузки.");
-      }
-      return await this.post("/v1/draft/supply/create", {
-        draft_id: toPositiveIntegerId(draftId) || draftId,
-        warehouse_id: warehouseId,
-        timeslot: {
-          from_in_timezone: normalizedSlot.from_in_timezone,
-          to_in_timezone: normalizedSlot.to_in_timezone,
-        },
-      }, {
-        maxRetries: 0,
-        minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-        base429DelayMs: 15000,
-      });
-    }
-    if (resolveDraftFlow(candidate) === "classic") {
-      const normalizedSlot = normalizeTimeslotForOzon(selectedSlot);
-      if (!normalizedSlot) {
-        throw new Error(
-          "Ozon РІРµСЂРЅСѓР» СЃР»РѕС‚ Р±РµР· РїРѕР»РЅРѕРіРѕ РІСЂРµРјРµРЅРё from_in_timezone/to_in_timezone. " +
-          "РђРІС‚РѕР±СЂРѕРЅСЊ РѕСЃС‚Р°РЅРѕРІР»РµРЅР°, С‡С‚РѕР±С‹ РЅРµ РѕС‚РїСЂР°РІР»СЏС‚СЊ РїСѓСЃС‚РѕР№ С‚Р°Р№РјСЃР»РѕС‚.",
-        );
-      }
-      const warehouseId = extractSlotWarehouseId(selectedSlot)
-        || normalizePositiveOzonIds(candidate.warehouse_ids).slice(0, 1)[0];
-      if (!warehouseId) {
-        throw new Error("Ozon нашёл слот, но не удалось определить warehouse_id для брони.");
-      }
-      try {
-        return await this.post("/v1/draft/supply/create", {
-          draft_id: toPositiveIntegerId(draftId) || draftId,
-          warehouse_id: warehouseId,
-          timeslot: {
-            from_in_timezone: normalizedSlot.from_in_timezone,
-            to_in_timezone: normalizedSlot.to_in_timezone,
-          },
-        }, {
-          maxRetries: 0,
-          minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-          base429DelayMs: 15000,
-        });
-      } catch (error) {
-        if (!isVersionFallbackError(error)) throw error;
-        // v1 устарел — бронируем через v2
-        const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
-        return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/supply/create", {
-          draft_id: toPositiveIntegerId(draftId) || draftId,
-          timeslot: normalizedSlot,
-          supply_type: resolveSupplyType(candidate),
-        }, selectedWarehouses, {
-          maxRetries: 0,
-          minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-          base429DelayMs: 15000,
-        });
-      }
-    }
-    const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
+    // /v1/draft/supply/create отключён Ozon 16.03.2026 — для всех flow используем v2
     const normalizedSlot = normalizeTimeslotForOzon(selectedSlot);
     if (!normalizedSlot) {
       throw new Error(
@@ -1593,40 +1473,29 @@ class OzonClient {
         "Автобронь остановлена, чтобы не отправлять пустой таймслот.",
       );
     }
+    const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
     const basePayload = {
       draft_id: toPositiveIntegerId(draftId) || draftId,
       timeslot: normalizedSlot,
       supply_type: resolveSupplyType(candidate),
     };
-    try {
-      if (candidate.timeslot_request_variant) {
-        return await this.post("/v2/draft/supply/create", {
-          ...basePayload,
-          supply_type: candidate.timeslot_request_variant.supply_type,
-          selected_cluster_warehouses: candidate.timeslot_request_variant.selected_cluster_warehouses,
-        }, {
-          maxRetries: 0,
-          minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-          base429DelayMs: 15000,
-        });
-      }
-      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/supply/create", basePayload, selectedWarehouses, {
-        maxRetries: 0,
-        minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-        base429DelayMs: 15000,
-      });
-    } catch (error) {
-      if (!isVersionFallbackError(error)) throw error;
-      return await this.post("/v1/draft/supply/create", {
-        draft_id: toPositiveIntegerId(draftId) || draftId,
-        timeslot: normalizedSlot,
-        warehouse_ids: selectedWarehouses.map((warehouse) => warehouse.storage_warehouse_id),
+    // Если при поиске слотов v2 принял конкретный вариант — используем его же при брони
+    if (candidate.timeslot_request_variant) {
+      return await this.post("/v2/draft/supply/create", {
+        ...basePayload,
+        supply_type: candidate.timeslot_request_variant.supply_type,
+        selected_cluster_warehouses: candidate.timeslot_request_variant.selected_cluster_warehouses,
       }, {
         maxRetries: 0,
         minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
         base429DelayMs: 15000,
       });
     }
+    return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/supply/create", basePayload, selectedWarehouses, {
+      maxRetries: 0,
+      minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
+      base429DelayMs: 15000,
+    });
   }
   async postWithSelectedClusterWarehouseVariants(endpoint, basePayload, selectedWarehouses, options) {
     const variants = buildSelectedClusterWarehousePayloadVariants(selectedWarehouses);
@@ -2324,9 +2193,17 @@ function resolveSupplyType(candidate = {}) {
 }
 
 function resolveDraftFlow(candidate = {}) {
-  return String(candidate.draft_flow || candidate.draftFlow || OZON_FBO_DRAFT_FLOW || "classic")
+  // ВАЖНО: classic flow использует /v1/draft/create, /v1/draft/create/info,
+  // /v1/draft/timeslot/info, /v1/draft/supply/create — все ОТКЛЮЧЕНЫ Ozon с 16.03.2026.
+  // Поэтому дефолт — direct (живые методы /v1/draft/direct/create + /v2/draft/*).
+  const flow = String(candidate.draft_flow || candidate.draftFlow || OZON_FBO_DRAFT_FLOW || "direct")
     .trim()
     .toLowerCase();
+  // Принудительно отводим от мёртвого classic, если его не запросили явно через env
+  if (flow === "classic" && OZON_FBO_DRAFT_FLOW !== "classic") {
+    return "direct";
+  }
+  return flow;
 }
 
 function resolveCrossdockDraftFlow() {
