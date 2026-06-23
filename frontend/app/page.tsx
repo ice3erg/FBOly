@@ -1233,7 +1233,7 @@ export default function Home() {
   return (
     <main className="min-h-screen overflow-hidden">
       <div className="mx-auto grid min-h-screen max-w-[1720px] lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="flex border-b border-white/[0.08] bg-[#080810]/80 px-4 py-4 backdrop-blur-2xl lg:min-h-screen lg:flex-col lg:border-b-0 lg:border-r lg:px-3 lg:py-5">
+        <aside className="flex border-b border-white/[0.08] bg-[#080810] px-4 py-4 lg:min-h-screen lg:flex-col lg:border-b-0 lg:border-r lg:px-3 lg:py-5">
           <div className="flex w-full items-center justify-between gap-4 lg:block">
             <BrandMark compact />
           </div>
@@ -1502,15 +1502,20 @@ function SupplyView({
   onOpenSlotHunter: () => void;
 }) {
   const isStoreConnected = hasFullCredentials && connectionStatus.type === "success";
-  const resultRef = useRef<HTMLDivElement | null>(null);
   const hasResult = Boolean(result);
+  const [forceUploadOpen, setForceUploadOpen] = useState(false);
+  const resultRef = useRef<HTMLDivElement | null>(null);
 
-  // Автоскролл к результату, когда распределение готово
+  // Шаг 1 (загрузка) активен пока нет результата или пользователь раскрыл вручную
+  const uploadState: "done" | "active" | "todo" = hasResult && !forceUploadOpen ? "done" : "active";
+  const prepareState: "done" | "active" | "todo" = !hasResult ? "todo" : forceUploadOpen ? "todo" : "active";
+
+  // Автоскролл к подготовке, когда распределение готово (без тяжёлого smooth на больших списках)
   useEffect(() => {
-    if (hasResult && resultRef.current) {
+    if (hasResult && !forceUploadOpen && resultRef.current) {
       resultRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, [hasResult]);
+  }, [hasResult, forceUploadOpen]);
 
   // Магазин не подключён — показываем приглашение, а не формы
   if (!isStoreConnected) {
@@ -1559,98 +1564,8 @@ function SupplyView({
       />
 
       <div className="rounded-xl border border-white/[0.08] bg-white/[0.025] px-5 py-4">
-        <StepProgress current={result ? 2 : 1} />
+        <StepProgress current={hasResult && !forceUploadOpen ? 2 : 1} />
       </div>
-
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b border-white/[0.08] bg-white/[0.025]">
-          <div className="flex items-center gap-3">
-            <StepBadge value="1" />
-            <div>
-              <CardTitle>Загрузите Excel файл</CardTitle>
-              <CardDescription>
-                FBOly сам найдёт товары, посчитает кластеры и подготовит черновики.
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="p-5">
-          <form className="space-y-5" onSubmit={onSubmit}>
-            <label className="group flex min-h-60 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-primary/45 bg-gradient-to-b from-primary/12 to-white/[0.025] px-5 py-10 text-center transition hover:border-primary/75 hover:bg-primary/15">
-              <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-accent text-white shadow-[0_0_34px_rgba(124,58,237,0.38)]">
-                <Upload className="h-8 w-8" />
-              </div>
-              <span className="max-w-full truncate text-xl font-semibold">
-                {selectedFile
-                  ? selectedFile.name
-                  : "Перетащите Excel сюда или выберите файл"}
-              </span>
-              <span className="mt-3 max-w-xl text-sm text-muted-foreground">
-                Колонки: SKU Ozon, артикул, название товара, количество
-              </span>
-              <input
-                className="sr-only"
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={onFileChange}
-              />
-            </label>
-
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={downloadInputTemplate}
-                className="w-fit gap-2 text-primary"
-              >
-                <Download className="h-4 w-4" />
-                Скачать шаблон Excel
-              </Button>
-              <Button
-                type="submit"
-                disabled={
-                  !selectedFile ||
-                  !hasFullCredentials ||
-                  isLoading
-                }
-                size="lg"
-                className="h-12 min-w-[220px] gap-2"
-              >
-                {isLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <FileSpreadsheet className="h-4 w-4" />
-                )}
-                Распределить товары
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      {result && (
-        <Card ref={resultRef}>
-          <CardHeader className="border-b border-white/[0.08] bg-white/[0.025]">
-            <div>
-              <CardTitle>Что распределилось</CardTitle>
-              <CardDescription>
-                Итог расчёта по статистике Ozon. Ниже выберите кластеры и подготовьте поставку.
-              </CardDescription>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4 p-5">
-            <div className="grid gap-3 md:grid-cols-4">
-              <MetricTile label="Товаров" value={String(result.resolved_items.length)} tone="green" />
-              <MetricTile label="Ошибок" value={String(result.errors.length)} tone="amber" />
-              <MetricTile label="Кластеров" value={String(result.files.length)} tone="blue" />
-              <MetricTile label="Итого" value={`${result.total_output_quantity} шт.`} tone="green" />
-            </div>
-            <div className="rounded-lg border border-primary/25 bg-primary/10 p-4 text-sm leading-relaxed text-purple-100">
-              {buildDistributionExplanation(result)}
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {requestError && (
         <Alert variant="destructive">
@@ -1660,28 +1575,100 @@ function SupplyView({
         </Alert>
       )}
 
-      {result ? (
-        <ResultPanel
-          result={result}
-          onDownloadZip={onDownloadZip}
-          onDownloadSingleFile={onDownloadSingleFile}
-          isZipping={isZipping}
-          onCreateOzonDrafts={onCreateOzonDrafts}
-          onSearchCrossdockPoints={onSearchCrossdockPoints}
-          onOpenSlotHunter={onOpenSlotHunter}
-          draftStatus={draftStatus}
-          isCreatingDrafts={isCreatingDrafts}
-        />
-      ) : (
-        <Card>
-          <CardContent className="p-5">
-            <EmptyState
-              icon={FileArchive}
-              title="Результат появится здесь"
-              text="После обработки FBOly покажет кластеры, Excel-файлы и кнопку создания черновиков."
+      {/* Шаг 1 — Загрузка Excel */}
+      <StepSection
+        n={1}
+        title="Загрузите Excel файл"
+        state={uploadState}
+        summary={
+          result
+            ? `Обработано: ${result.resolved_items.length} SKU, ${result.total_output_quantity} шт.${selectedFile ? ` · ${selectedFile.name}` : ""}`
+            : undefined
+        }
+        onExpand={() => setForceUploadOpen(true)}
+      >
+        <form className="space-y-5" onSubmit={onSubmit}>
+          <label className="group flex min-h-52 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-primary/45 bg-primary/[0.06] px-5 py-10 text-center transition hover:border-primary/75 hover:bg-primary/[0.1]">
+            <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-accent text-white">
+              <Upload className="h-8 w-8" />
+            </div>
+            <span className="max-w-full truncate text-xl font-semibold">
+              {selectedFile
+                ? selectedFile.name
+                : "Перетащите Excel сюда или выберите файл"}
+            </span>
+            <span className="mt-3 max-w-xl text-sm text-muted-foreground">
+              Колонки: SKU Ozon, артикул, название товара, количество
+            </span>
+            <input
+              className="sr-only"
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={onFileChange}
             />
-          </CardContent>
-        </Card>
+          </label>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={downloadInputTemplate}
+              className="w-fit gap-2 text-primary"
+            >
+              <Download className="h-4 w-4" />
+              Скачать шаблон Excel
+            </Button>
+            <Button
+              type="submit"
+              disabled={!selectedFile || !hasFullCredentials || isLoading}
+              size="lg"
+              className="h-12 min-w-[220px] gap-2"
+              onClick={() => setForceUploadOpen(false)}
+            >
+              {isLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="h-4 w-4" />
+              )}
+              {result ? "Распределить заново" : "Распределить товары"}
+            </Button>
+          </div>
+        </form>
+      </StepSection>
+
+      {/* Шаг 2 — Подготовка поставки */}
+      {result && (
+        <div ref={resultRef}>
+          <StepSection
+            n={2}
+            title="Подготовьте поставку"
+            state={prepareState}
+          >
+            <div className="space-y-5">
+              <div className="grid gap-3 md:grid-cols-4">
+                <MetricTile label="Товаров" value={String(result.resolved_items.length)} tone="green" />
+                <MetricTile label="Ошибок" value={String(result.errors.length)} tone="amber" />
+                <MetricTile label="Кластеров" value={String(result.files.length)} tone="blue" />
+                <MetricTile label="Итого" value={`${result.total_output_quantity} шт.`} tone="green" />
+              </div>
+              <div className="rounded-lg border border-primary/25 bg-primary/[0.08] p-4 text-sm leading-relaxed text-purple-100">
+                {buildDistributionExplanation(result)}
+              </div>
+
+              <ResultPanel
+                result={result}
+                onDownloadZip={onDownloadZip}
+                onDownloadSingleFile={onDownloadSingleFile}
+                isZipping={isZipping}
+                onCreateOzonDrafts={onCreateOzonDrafts}
+                onSearchCrossdockPoints={onSearchCrossdockPoints}
+                onOpenSlotHunter={onOpenSlotHunter}
+                draftStatus={draftStatus}
+                isCreatingDrafts={isCreatingDrafts}
+              />
+            </div>
+          </StepSection>
+        </div>
       )}
     </div>
   );
@@ -2223,16 +2210,13 @@ function DraftCreationPanel({
   }, [dropOffSearch, selectedDropOffName, onSearchCrossdockPoints]);
 
   return (
-    <Card className="overflow-hidden">
-      <CardHeader className="flex flex-col gap-3 border-b border-white/[0.08] bg-white/[0.025] lg:flex-row lg:items-start lg:justify-between">
-        <div className="flex items-center gap-3">
-          <StepBadge value="2" />
-          <div>
-            <CardTitle>Подготовить поставку</CardTitle>
-            <CardDescription>
-              Выберите кластеры и способ отгрузки. Заявка появится в кабинете Ozon после того, как охотник найдёт и забронирует слот.
-            </CardDescription>
-          </div>
+    <Card className="overflow-hidden border-white/[0.08]">
+      <CardHeader className="flex flex-col gap-3 border-b border-white/[0.08] bg-white/[0.02] lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <CardTitle>Кластеры для поставки</CardTitle>
+          <CardDescription>
+            Выберите кластеры и способ отгрузки. Заявка появится в кабинете Ozon после того, как охотник найдёт и забронирует слот.
+          </CardDescription>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -3176,10 +3160,57 @@ function pluralRu(count: number, one: string, few: string, many: string) {
   return many;
 }
 
-function StepBadge({ value }: { value: string }) {
+function StepSection({
+  n,
+  title,
+  summary,
+  state,
+  onExpand,
+  children,
+}: {
+  n: number;
+  title: string;
+  summary?: string;
+  state: "done" | "active" | "todo";
+  onExpand?: () => void;
+  children?: React.ReactNode;
+}) {
+  const collapsed = state !== "active";
+  const clickable = collapsed && state === "done" && Boolean(onExpand);
   return (
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-accent text-sm font-semibold text-white shadow-[0_0_26px_rgba(124,58,237,0.32)]">
-      {value}
+    <div
+      className={cn(
+        "overflow-hidden rounded-xl border",
+        state === "active" ? "border-primary/40 bg-white/[0.03]" : "border-white/[0.08] bg-white/[0.02]",
+      )}
+    >
+      <button
+        type="button"
+        onClick={clickable ? onExpand : undefined}
+        className={cn(
+          "flex w-full items-center gap-3 px-5 py-4 text-left",
+          clickable ? "cursor-pointer hover:bg-white/[0.02]" : "cursor-default",
+        )}
+      >
+        <div
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold",
+            state === "done" && "bg-secondary/20 text-secondary",
+            state === "active" && "bg-primary text-white",
+            state === "todo" && "border border-white/15 text-muted-foreground",
+          )}
+        >
+          {state === "done" ? <CheckCircle2 className="h-4 w-4" /> : n}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className={cn("font-semibold", state === "todo" && "text-muted-foreground")}>{title}</div>
+          {collapsed && summary && (
+            <div className="mt-0.5 truncate text-sm text-muted-foreground">{summary}</div>
+          )}
+        </div>
+        {clickable && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+      </button>
+      {!collapsed && <div className="border-t border-white/[0.08] p-5">{children}</div>}
     </div>
   );
 }
