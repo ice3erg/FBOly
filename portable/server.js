@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-05-19-crossdock-single-dropoff-slot";
+const APP_VERSION = "2026-06-23-fix-obsolete-timeslot-fallback";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1502,18 +1502,21 @@ class OzonClient {
           });
         }
       }
-      if (!OZON_ALLOW_LEGACY_DRAFT_API || !isVersionFallbackError(error)) throw error;
-      return await this.post("/v1/draft/timeslot/info", {
-        draft_id: numericDraftId || draftId,
-        date_from: toOzonTimestampStartOfDay(dateFrom),
-        date_to: toOzonTimestampEndOfDay(dateTo),
-        warehouse_ids: selectedWarehouses.map((warehouse) => warehouse.storage_warehouse_id),
-      }, {
-        maxRetries: 0,
-        minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
-        base429DelayMs: 15000,
-        rateLimitCooldownMs: 90000,
-      });
+      // Всегда пробуем v1 при obsolete/deprecated — Ozon мигрирует методы постепенно
+      if (isVersionFallbackError(error)) {
+        return await this.post("/v1/draft/timeslot/info", {
+          draft_id: numericDraftId || draftId,
+          date_from: toOzonTimestampStartOfDay(dateFrom),
+          date_to: toOzonTimestampEndOfDay(dateTo),
+          warehouse_ids: selectedWarehouses.map((warehouse) => warehouse.storage_warehouse_id),
+        }, {
+          maxRetries: 0,
+          minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
+          base429DelayMs: 15000,
+          rateLimitCooldownMs: 90000,
+        });
+      }
+      throw error;
     }
   }
   async createSupplyFromDraft(draftId, selectedSlot, settings = {}, candidate = {}) {
@@ -1600,7 +1603,7 @@ class OzonClient {
         base429DelayMs: 15000,
       });
     } catch (error) {
-      if (!OZON_ALLOW_LEGACY_DRAFT_API || !isVersionFallbackError(error)) throw error;
+      if (!isVersionFallbackError(error)) throw error;
       return await this.post("/v1/draft/supply/create", {
         draft_id: toPositiveIntegerId(draftId) || draftId,
         timeslot: normalizedSlot,
@@ -3793,7 +3796,9 @@ async function attemptSlotHunterTarget(job, target) {
   } catch (error) {
     const message = error.message || "Ошибка Ozon API";
     const status = Number(error && error.status);
-    const isRequestRejected = status >= 400 && status < 500 && status !== 429;
+    const isObsolete = isObsoleteMethodError(error);
+    // obsolete method — не фатально, getDraftTimeslots сам делает фоллбэк на v1/v2
+    const isRequestRejected = status >= 400 && status < 500 && status !== 429 && !isObsolete;
     if (error && error.operationId && !target.operation_id) {
       target.operation_id = cleanIdentifier(error.operationId);
     }
@@ -4576,7 +4581,15 @@ function isEndpointFallbackError(error) {
 
 function isVersionFallbackError(error) {
   const status = Number(error && error.status);
-  if ([404, 405, 410].includes(status)) return true;
+  if ([400, 404, 405, 410].includes(status)) {
+    const message = String((error && error.message) || "");
+    const responseText = String((error && error.responseText) || "");
+    // 400 только если это именно "obsolete/deprecated" — не любой 400
+    if (status === 400) {
+      return /obsolete|deprecated|cannot be used|unknown method/i.test(`${message} ${responseText}`);
+    }
+    return true;
+  }
   const message = String((error && error.message) || "");
   const responseText = String((error && error.responseText) || "");
   return /not found|obsolete|deprecated|устар|unknown method|method not allowed|не найден/i.test(`${message} ${responseText}`);
