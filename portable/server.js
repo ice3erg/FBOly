@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-crossdock-per-variant-errors";
+const APP_VERSION = "2026-06-24-crossdock-autodetect-from-draft";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1490,7 +1490,63 @@ class OzonClient {
         supply_type: resolveSupplyType(candidate),
       }, selectedWarehouses, slotOptions);
     }
-    // Direct: только v2
+    // Direct: только v2. Но сначала проверим — вдруг это crossdock-черновик,
+    // у которого потерялся supply_mode (тогда selected_cluster_warehouses не сработают).
+    // Проверяем один раз и кэшируем, чтобы не бить draft_info каждую попытку.
+    if (candidate.__crossdock_check_done === undefined) {
+      const directDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
+        if (e.status === 429) throw e;
+        return null;
+      });
+      const directClusters = directDraftInfo && Array.isArray(directDraftInfo.clusters) ? directDraftInfo.clusters : [];
+      candidate.__crossdock_check_done = directClusters.some((c) => String(c.supply_type || "").toUpperCase() === "CROSSDOCK");
+      if (candidate.__crossdock_check_done) {
+        candidate.supply_mode = "crossdock";
+        candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(directDraftInfo, candidate);
+        candidate.__crossdock_draft_dump = safeJsonSnippet(directDraftInfo, 900);
+      }
+    }
+    if (candidate.__crossdock_check_done) {
+      const macrolocalIds = candidate.__crossdock_macrolocal || [];
+      if (macrolocalIds.length) {
+        const crossdockBase = {
+          draft_id: numericDraftId || draftId,
+          date_from: dateFrom,
+          date_to: dateTo,
+          supply_type: 2,
+        };
+        const dropOffId = toPositiveIntegerId(getDropOffPointWarehouseId(candidate));
+        const variants = [
+          macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id })),
+          dropOffId ? macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id, storage_warehouse_id: dropOffId })) : null,
+        ].filter(Boolean);
+        let lastErr = null;
+        const vErrors = [];
+        for (const supply_type of [2, 1, 3]) {
+          for (const selected_cluster_warehouses of variants) {
+            try {
+              const data = await this.post("/v2/draft/timeslot/info", { ...crossdockBase, supply_type, selected_cluster_warehouses }, slotOptions);
+              if (data && typeof data === "object" && !Array.isArray(data)) {
+                data.__request_variant = { supply_type, selected_cluster_warehouses };
+              }
+              return data;
+            } catch (error) {
+              lastErr = error;
+              if (error.status === 429) throw error;
+              if (isSelectedClusterWarehousesValidationError(error) || isSupplyTypeValidationError(error)) {
+                vErrors.push(`st=${supply_type} ${JSON.stringify(selected_cluster_warehouses)} -> ${(error.message || "").replace(/Если ошибка.*$/s, "").slice(0, 180)}`);
+                continue;
+              }
+              throw error;
+            }
+          }
+        }
+        if (lastErr) {
+          lastErr.message = `Crossdock не нашёл слот. [variant_errors: ${vErrors.join(" || ")}] [draft_info: ${candidate.__crossdock_draft_dump}]`;
+          throw lastErr;
+        }
+      }
+    }
     const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
     const basePayload = {
       draft_id: numericDraftId || draftId,
@@ -3888,6 +3944,8 @@ async function attemptSlotHunterTarget(job, target) {
     if (error && error.operationId && !target.operation_id) {
       target.operation_id = cleanIdentifier(error.operationId);
     }
+    // Показываем полное сообщение если в нём есть диагностика (crossdock variant_errors / draft_info)
+    const hasDiagnostics = /\[variant_errors:|\[draft_info:|\[debug:|\[crossdock/.test(message);
     target.error_message = status === 429 ? null : message;
     target.last_message = status === 429
       ? currentAction === "create_supply"
@@ -3895,9 +3953,11 @@ async function attemptSlotHunterTarget(job, target) {
         : "Пауза из-за лимита Ozon, повторим автоматически"
       : needRecreate
         ? `Черновик устарел. ${message}`
-        : isRequestRejected
-          ? "Ozon отклонил запрос. Остановил повторы по этому городу, чтобы не крутить ошибку бесконечно"
-          : message;
+        : hasDiagnostics
+          ? message
+          : isRequestRejected
+            ? "Ozon отклонил запрос. Остановил повторы по этому городу, чтобы не крутить ошибку бесконечно"
+            : message;
     target.status = status === 429 ? "cooldown" : isRequestRejected ? "failed" : "searching";
     if (status === 429) {
       pauseSlotHunterForRateLimit(job, target, error, currentAction);
