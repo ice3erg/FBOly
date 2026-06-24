@@ -3051,13 +3051,21 @@ function SlotHunterView({
                         </div>
                       </div>
                       <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                        <div>Попыток: {target.attempts_count}</div>
-                        <div>{target.last_message || "Ожидает попытки"}</div>
-                        {target.supply_order_id && (
-                          <div className="font-medium text-green-400">✓ Заявка создана: {target.supply_order_id}</div>
+                        {target.supply_order_id ? (
+                          <div className="font-medium text-green-400">✓ Заявка создана в Ozon</div>
+                        ) : target.status === "failed" ? (
+                          <div className="text-destructive">{target.last_message || "Ошибка при поиске слота"}</div>
+                        ) : target.status === "booked" ? (
+                          <div className="text-green-400">Слот забронирован</div>
+                        ) : target.status === "cooldown" ? (
+                          <div>Пауза из-за лимита Ozon, повторяем автоматически</div>
+                        ) : target.status === "searching" ? (
+                          <div>Ищем слот...</div>
+                        ) : (
+                          <div>Ожидает попытки</div>
                         )}
-                        {target.error_message && (
-                          <div className="text-destructive">{target.error_message}</div>
+                        {target.next_attempt_at && !["booked", "failed", "completed"].includes(target.status) && (
+                          <div>Следующая попытка: {formatDate(target.next_attempt_at)}</div>
                         )}
                       </div>
                     </div>
@@ -3089,52 +3097,6 @@ function SlotHunterView({
             </CardContent>
           </Card>
 
-          {job && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Журнал попыток</CardTitle>
-                <CardDescription>
-                  Последние запросы к Ozon и ответы охотника.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {job.attempts.length ? (
-                  <div className="space-y-2">
-                    {job.attempts.slice(0, 20).map((attempt) => (
-                      <div key={attempt.id} className="rounded-lg border p-3 text-sm">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="font-medium">
-                            {attempt.warehouse || "задача"} · {attempt.attempt_type}
-                          </div>
-                          <Badge variant={slotHunterBadgeVariant(attempt.status)}>
-                            {slotHunterStatusLabel(attempt.status)}
-                          </Badge>
-                        </div>
-                        <div className="mt-1 text-muted-foreground">
-                          {attempt.message}
-                        </div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {formatDate(attempt.attempted_at)}
-                          {attempt.http_status ? ` · HTTP ${attempt.http_status}` : ""}
-                        </div>
-                        {Boolean(attempt.raw_response) && (
-                          <div className="mt-2 break-words rounded bg-muted/60 p-2 font-mono text-[11px] text-muted-foreground">
-                            {formatDebugValue(attempt.raw_response)}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyState
-                    icon={Activity}
-                    title="Попыток ещё нет"
-                    text="После запуска здесь появятся проверки складов."
-                  />
-                )}
-              </CardContent>
-            </Card>
-          )}
         </section>
       </div>
     </div>

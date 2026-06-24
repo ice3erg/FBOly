@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-macrolocal-refetch-no-stuck-flag";
+const APP_VERSION = "2026-06-24-fast-resolve-clean-ui";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -91,8 +91,8 @@ const DRAFT_CREATION_SPACING_MS = Number(process.env.DRAFT_CREATION_SPACING_MS |
 const TARGET_STOCK_DAYS = 21;
 const ANALYTICS_PERIOD_DAYS = 30;
 const MIN_OUTPUT_CLUSTER_QUANTITY = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 15);
-const SLOT_HUNTER_DEFAULT_INTERVAL_SECONDS = 15;
-const SLOT_HUNTER_MIN_INTERVAL_SECONDS = 8;
+const SLOT_HUNTER_DEFAULT_INTERVAL_SECONDS = 30;
+const SLOT_HUNTER_MIN_INTERVAL_SECONDS = 15;
 const SLOT_HUNTER_DEFAULT_MAX_MINUTES = 240;
 const SLOT_HUNTER_MAX_ATTEMPTS_PER_TARGET = 2000;
 
@@ -929,60 +929,49 @@ function rowsToItems(rows) {
 async function resolveItems(items, client) {
   const resolved = [];
   const errors = [];
-  for (const item of items) {
-    if (item.offer_id) {
-      let enriched = null;
-      let enrichError = null;
-      if (client) {
-        try {
-          enriched = await client.findProduct({
-            offer_id: item.offer_id,
-            sku: item.sku || item.offer_id,
-            name: item.name,
-          });
-        } catch (error) {
-          enrichError = error;
-          enriched = null;
+
+  // Параллельная обработка батчами по 5 — ускоряет в 4-5 раз при большом кол-ве SKU
+  const BATCH_SIZE = 5;
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const batch = items.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(batch.map(async (item) => {
+      if (item.offer_id) {
+        let enriched = null;
+        let enrichError = null;
+        if (client) {
+          try {
+            enriched = await client.findProduct({
+              offer_id: item.offer_id,
+              sku: item.sku || item.offer_id,
+              name: item.name,
+            });
+          } catch (error) {
+            enrichError = error;
+            enriched = null;
+          }
         }
+        if (enrichError) {
+          return { type: "error", value: { row_number: item.row_number, message: `Ошибка Ozon API: ${enrichError.message}`, input: item, diagnostics: client.getLastLookupTrace() } };
+        }
+        if (client && isLikelyOzonSku(item.offer_id) && !enriched) {
+          return { type: "error", value: { row_number: item.row_number, message: "SKU Ozon из колонки артикул не найден через product/info/list, related-sku, остатки, product_id и каталог товаров. Проверьте, что Client-Id относится к нужному кабинету и это именно SKU Ozon, а не штрихкод или ID из другого кабинета.", input: item, diagnostics: client.getLastLookupTrace() } };
+        }
+        return { type: "resolved", value: { row_number: item.row_number, offer_id: enriched ? enriched.offer_id : item.offer_id, name: (enriched && enriched.name) || item.name, quantity: item.quantity, source: enriched ? "excel_offer_id+ozon_api" : "excel_offer_id", sku: (enriched && enriched.sku) || item.sku || (/^\d+$/.test(item.offer_id) ? item.offer_id : null) } };
       }
-      if (enrichError) {
-        errors.push({
-          row_number: item.row_number,
-          message: `Ошибка Ozon API: ${enrichError.message}`,
-          input: item,
-          diagnostics: client.getLastLookupTrace(),
-        });
-        continue;
+      if (!client) {
+        return { type: "error", value: { row_number: item.row_number, message: "Для поиска по SKU или названию введите Client-Id и Api-Key", input: item } };
       }
-      if (client && isLikelyOzonSku(item.offer_id) && !enriched) {
-        errors.push({
-          row_number: item.row_number,
-          message: "SKU Ozon из колонки артикул не найден через product/info/list, related-sku, остатки, product_id и каталог товаров. Проверьте, что Client-Id относится к нужному кабинету и это именно SKU Ozon, а не штрихкод или ID из другого кабинета.",
-          input: item,
-          diagnostics: client.getLastLookupTrace(),
-        });
-        continue;
+      try {
+        const product = await client.findProduct({ sku: item.sku, name: item.name });
+        if (!product) return { type: "error", value: { row_number: item.row_number, message: buildProductNotFoundMessage(item), input: item, diagnostics: client.getLastLookupTrace() } };
+        return { type: "resolved", value: { row_number: item.row_number, offer_id: product.offer_id, name: product.name || item.name, quantity: item.quantity, source: "ozon_api", sku: product.sku || item.sku } };
+      } catch (error) {
+        return { type: "error", value: { row_number: item.row_number, message: `Ошибка Ozon API: ${error.message}`, input: item, diagnostics: client.getLastLookupTrace() } };
       }
-      resolved.push({
-        row_number: item.row_number,
-        offer_id: enriched ? enriched.offer_id : item.offer_id,
-        name: (enriched && enriched.name) || item.name,
-        quantity: item.quantity,
-        source: enriched ? "excel_offer_id+ozon_api" : "excel_offer_id",
-        sku: (enriched && enriched.sku) || item.sku || (/^\d+$/.test(item.offer_id) ? item.offer_id : null),
-      });
-      continue;
-    }
-    if (!client) {
-      errors.push({ row_number: item.row_number, message: "Для поиска по SKU или названию введите Client-Id и Api-Key", input: item });
-      continue;
-    }
-    try {
-      const product = await client.findProduct({ sku: item.sku, name: item.name });
-      if (!product) errors.push({ row_number: item.row_number, message: buildProductNotFoundMessage(item), input: item, diagnostics: client.getLastLookupTrace() });
-      else resolved.push({ row_number: item.row_number, offer_id: product.offer_id, name: product.name || item.name, quantity: item.quantity, source: "ozon_api", sku: product.sku || item.sku });
-    } catch (error) {
-      errors.push({ row_number: item.row_number, message: `Ошибка Ozon API: ${error.message}`, input: item, diagnostics: client.getLastLookupTrace() });
+    }));
+    for (const result of batchResults) {
+      if (result.type === "error") errors.push(result.value);
+      else resolved.push(result.value);
     }
   }
   return { resolved, errors };
@@ -1539,8 +1528,17 @@ class OzonClient {
       return cachedDraftWarehouses.slice(0, 20);
     }
 
+    // Если macrolocal уже добыт ранее (любым путём) — не делаем лишних запросов к Ozon
+    const existingMacrolocal = preferMacrolocalClusterIds(candidate.cluster_ids || []).filter((id) => id >= 1000);
+    if (existingMacrolocal.length && candidate.macrolocal_lookup_done) {
+      const warehouseIds = normalizePositiveOzonIds(candidate.warehouse_ids);
+      if (warehouseIds.length) {
+        return buildSelectedClusterWarehousesFromIds(existingMacrolocal, warehouseIds).slice(0, 20);
+      }
+    }
+
     let selectedWarehouses = [];
-    // Пробуем draft_info каждый раз (429 временный, флаг не застревает навсегда)
+    // Пробуем draft_info только если ещё не получили macrolocal из него
     if (draftId) {
       try {
         const draftInfo = await this.getSupplyDraftInfoByDraftId(draftId);
@@ -1551,16 +1549,16 @@ class OzonClient {
         if (selectedWarehouses.length) {
           candidate.selected_cluster_warehouses = selectedWarehouses;
           candidate.selected_cluster_warehouses_source = "draft_info";
+          candidate.macrolocal_lookup_done = true;
         }
       } catch (error) {
-        // 429 пробрасываем — охотник сделает паузу и повторит весь шаг
         if (error.status === 429) throw error;
       }
     }
     if (!selectedWarehouses.length) {
       selectedWarehouses = normalizeSelectedClusterWarehouses(candidate.selected_cluster_warehouses);
     }
-    // Если есть warehouse_ids, но нет macrolocal — добираем macrolocal по названию города
+    // Если есть warehouse_ids, но нет macrolocal — добираем macrolocal по названию города (один раз)
     const cachedHasMacro = selectedWarehouses.some((item) => item.cluster_id && Number(item.cluster_id) >= 1000);
     if (!cachedHasMacro) {
       let macrolocalIds = preferMacrolocalClusterIds(candidate.cluster_ids || []).filter((id) => id >= 1000);
@@ -1590,7 +1588,7 @@ class OzonClient {
       throw new Error(
         "Для поиска слотов Ozon требует selected_cluster_warehouses: " +
         "нужны ID складов приёмки storage_warehouse_id. " +
-        "Нажмите «Загрузить города Ozon», заново создайте поставку и запустите охотника.",
+        "Пересоздайте поставку через кнопку «Подготовить» и запустите охотника заново.",
       );
     }
     // v2 требует macrolocal_cluster_id > 0 (и это большой id >= 1000, не classic).
@@ -1598,9 +1596,8 @@ class OzonClient {
     if (!hasMacrolocalCluster) {
       throw Object.assign(
         new Error(
-          "Этот черновик создан без macrolocal_cluster_id, который Ozon теперь требует для поиска слотов. " +
-          "Создайте поставку заново: загрузите Excel, нажмите «Подготовить», затем запустите охотника. " +
-          "Старые черновики (созданные до обновления) больше не подходят.",
+          "Не удалось найти macrolocal_cluster_id для этого черновика. " +
+          "Пересоздайте поставку: нажмите «Подготовить» и запустите охотника заново.",
         ),
         { __needRecreateDraft: true },
       );
@@ -4314,40 +4311,21 @@ ${sheetRows.map((row, rowIndex) => `<row r="${rowIndex + 1}">${row.map((cell, co
 }
 
 function createInputTemplateXlsx() {
-  const rows = [
-    {
-      sku: "4222357394",
-      offer_id: "",
-      name: "Платок женский DENOMADE",
-      quantity: 40,
-      comment: "Если есть SKU Ozon, артикул можно оставить пустым",
-    },
-    {
-      sku: "",
-      offer_id: "DN-EAR-001",
-      name: "Серьги DENOMADE",
-      quantity: 25,
-      comment: "Если есть артикул продавца, SKU можно оставить пустым",
-    },
-  ];
   const sheetRows = [
-    INPUT_TEMPLATE_COLUMNS.map((value) => ({ type: "s", value })),
-    ...rows.map((row) => [
-      { type: "s", value: row.sku },
-      { type: "s", value: row.offer_id },
-      { type: "s", value: row.name },
-      { type: "n", value: row.quantity },
-      { type: "s", value: row.comment },
-    ]),
+    [
+      { type: "s", value: "SKU Ozon" },
+      { type: "s", value: "Артикул продавца" },
+      { type: "s", value: "Название товара" },
+      { type: "s", value: "Количество" },
+    ],
   ];
   const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <cols>
 <col min="1" max="1" width="18" customWidth="1"/>
-<col min="2" max="2" width="18" customWidth="1"/>
-<col min="3" max="3" width="34" customWidth="1"/>
+<col min="2" max="2" width="22" customWidth="1"/>
+<col min="3" max="3" width="38" customWidth="1"/>
 <col min="4" max="4" width="14" customWidth="1"/>
-<col min="5" max="5" width="52" customWidth="1"/>
 </cols>
 <sheetData>
 ${sheetRows.map((row, rowIndex) => `<row r="${rowIndex + 1}">${row.map((cell, columnIndex) => {
@@ -4358,7 +4336,7 @@ ${sheetRows.map((row, rowIndex) => `<row r="${rowIndex + 1}">${row.map((cell, co
 }).join("")}</row>`).join("\n")}
 </sheetData>
 <dataValidations count="1">
-<dataValidation type="whole" operator="greaterThan" allowBlank="0" sqref="D2:D5000"><formula1>0</formula1></dataValidation>
+<dataValidation type="whole" operator="greaterThan" allowBlank="1" sqref="D2:D5000"><formula1>0</formula1></dataValidation>
 </dataValidations>
 </worksheet>`;
   return createZip([
