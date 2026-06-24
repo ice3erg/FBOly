@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-clean-ui-draft-spacing";
+const APP_VERSION = "2026-06-25-crossdock-detect-by-dropoff";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1490,24 +1490,49 @@ class OzonClient {
         supply_type: resolveSupplyType(candidate),
       }, selectedWarehouses, slotOptions);
     }
-    // Direct: только v2. Но сначала проверим — вдруг это crossdock-черновик,
-    // у которого потерялся supply_mode (тогда selected_cluster_warehouses не сработают).
-    // Проверяем один раз и кэшируем, чтобы не бить draft_info каждую попытку.
-    if (candidate.__crossdock_check_done === undefined) {
-      const directDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
-        if (e.status === 429) throw e;
-        return null;
-      });
-      const directClusters = directDraftInfo && Array.isArray(directDraftInfo.clusters) ? directDraftInfo.clusters : [];
-      candidate.__crossdock_check_done = directClusters.some((c) => String(c.supply_type || "").toUpperCase() === "CROSSDOCK");
-      if (candidate.__crossdock_check_done) {
+    // Direct: только v2. Но сначала надёжно проверим — вдруг это crossdock-черновик.
+    // Сигналы: supply_mode кандидата, drop_off_point, supply_type в самом черновике.
+    if (candidate.__crossdock_check_done !== true) {
+      // Быстрые сигналы без запроса к Ozon
+      const hasDropOff = Boolean(toPositiveIntegerId(getDropOffPointWarehouseId(candidate)));
+      const modeIsCrossdock = isCrossdockCandidate(candidate);
+      if (modeIsCrossdock || hasDropOff) {
+        candidate.__crossdock_check_done = true;
         candidate.supply_mode = "crossdock";
-        candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(directDraftInfo, candidate);
-        candidate.__crossdock_draft_dump = safeJsonSnippet(directDraftInfo, 1800);
-        candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(directDraftInfo);
+      } else {
+        // Точная проверка через черновик
+        const directDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
+          if (e.status === 429) throw e;
+          return null;
+        });
+        // Если запрос НЕ удался (null) — не кэшируем, попробуем в следующий раз
+        if (directDraftInfo) {
+          const directClusters = Array.isArray(directDraftInfo.clusters) ? directDraftInfo.clusters : [];
+          const isCd = directClusters.some((c) => String(c.supply_type || c.supplyType || "").toUpperCase().includes("CROSSDOCK"))
+            || String(directDraftInfo.supply_type || directDraftInfo.supplyType || "").toUpperCase().includes("CROSSDOCK");
+          candidate.__crossdock_check_done = isCd;
+          if (isCd) {
+            candidate.supply_mode = "crossdock";
+            candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(directDraftInfo, candidate);
+            candidate.__crossdock_draft_dump = safeJsonSnippet(directDraftInfo, 1800);
+            candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(directDraftInfo);
+          }
+        }
       }
     }
-    if (candidate.__crossdock_check_done) {
+    if (candidate.__crossdock_check_done === true) {
+      // Если macrolocal ещё не добыт (быстрый сигнал сработал) — добираем из черновика
+      if (!candidate.__crossdock_macrolocal || !candidate.__crossdock_macrolocal.length) {
+        const cdDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
+          if (e.status === 429) throw e;
+          return null;
+        });
+        if (cdDraftInfo) {
+          candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(cdDraftInfo, candidate);
+          candidate.__crossdock_draft_dump = safeJsonSnippet(cdDraftInfo, 1800);
+          candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(cdDraftInfo);
+        }
+      }
       const macrolocalIds = candidate.__crossdock_macrolocal || [];
       if (macrolocalIds.length) {
         const crossdockBase = {
@@ -2417,7 +2442,9 @@ function resolveSupplyType(candidate = {}) {
     || (candidate.cluster_info && candidate.cluster_info.supply_type)
     || (candidate.clusterInfo && candidate.clusterInfo.supplyType);
   const parsed = toPositiveIntegerId(raw);
-  return parsed || 1;
+  if (parsed) return parsed;
+  // Если supply_type потерян, но это crossdock — дефолт 2 (CROSSDOCK), иначе 1 (DIRECT)
+  return isCrossdockCandidate(candidate) ? 2 : 1;
 }
 
 function resolveDraftFlow(candidate = {}) {
@@ -2447,12 +2474,16 @@ function normalizeSupplyMode(value) {
 }
 
 function isCrossdockCandidate(candidate = {}) {
-  return normalizeSupplyMode(
+  const mode = normalizeSupplyMode(
     candidate.supply_mode
       || candidate.supplyMode
       || candidate.delivery_mode
       || candidate.deliveryMode,
-  ) === "crossdock";
+  );
+  if (mode === "crossdock") return true;
+  // Если задана точка отгрузки crossdock — это crossdock даже без явного supply_mode
+  if (toPositiveIntegerId(getDropOffPointWarehouseId(candidate))) return true;
+  return false;
 }
 
 function getCrossdockTimeslotWarehouseIds(candidate = {}) {
