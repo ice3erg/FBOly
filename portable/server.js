@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-fast-resolve-clean-ui";
+const APP_VERSION = "2026-06-24-macrolocal-diag-fatal";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1511,11 +1511,22 @@ class OzonClient {
           lastError = error;
           if (error.status === 429) throw error;
           if (isSelectedClusterWarehousesValidationError(error) || isSupplyTypeValidationError(error)) {
+            // Прикрепляем диагностику: что именно отправили Ozon
+            if (!error.__sentVariant) {
+              error.__sentVariant = JSON.stringify({ supply_type, selected_cluster_warehouses });
+            }
             continue;
           }
           throw error;
         }
       }
+    }
+    // Если все варианты дали MacrolocalClusterId ошибку — добавляем диагностику и делаем фатальной
+    if (lastError && isSelectedClusterWarehousesValidationError(lastError)) {
+      const diagInfo = `Варианты: ${variants.map((v) => JSON.stringify(v)).join(" | ")} | selectedWarehouses: ${JSON.stringify(selectedWarehouses.slice(0, 3))}`;
+      lastError.message = `${lastError.message} [debug: ${diagInfo}]`;
+      // Не крутим ошибку 11 раз — пересоздать черновик
+      Object.assign(lastError, { __needRecreateDraft: true });
     }
     throw lastError || new Error("Ozon не принял selected_cluster_warehouses");
   }
