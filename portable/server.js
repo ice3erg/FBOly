@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-crossdock-draft-info-dump";
+const APP_VERSION = "2026-06-24-crossdock-per-variant-errors";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1425,42 +1425,60 @@ class OzonClient {
       rateLimitCooldownMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
     };
     if (isCrossdockCandidate(candidate)) {
-      // ДИАГНОСТИКА: получаем сырой ответ draft/create/info, чтобы увидеть реальную структуру
-      let draftInfoDump = "нет";
-      try {
-        const draftInfo = await this.getSupplyDraftInfoByDraftId(draftId);
-        draftInfoDump = safeJsonSnippet(draftInfo, 2000);
-      } catch (e) {
-        if (e.status === 429) throw e;
-        draftInfoDump = `ошибка draft_info: ${e.message}`;
+      // Crossdock: у черновика storage_warehouse = null (склад определяется после
+      // сортировки). Поэтому в selected_cluster_warehouses шлём ТОЛЬКО macrolocal_cluster_id.
+      const draftInfo = await this.getSupplyDraftInfoByDraftId(draftId);
+      const macrolocalIds = extractCrossdockMacrolocalIds(draftInfo, candidate);
+      if (!macrolocalIds.length) {
+        throw Object.assign(
+          new Error("Не удалось определить macrolocal_cluster_id crossdock-черновика. Пересоздайте поставку."),
+          { __needRecreateDraft: true },
+        );
       }
-      // /v1/draft/timeslot/info отключён Ozon 16.03.2026 — используем только v2
       const crossdockBase = {
         draft_id: numericDraftId || draftId,
         date_from: dateFrom,
         date_to: dateTo,
         supply_type: resolveSupplyType(candidate),
       };
-      // Пробуем БЕЗ selected_cluster_warehouses (crossdock привязан к точке отгрузки)
-      try {
-        const data = await this.post("/v2/draft/timeslot/info", crossdockBase, slotOptions);
-        if (data && typeof data === "object" && !Array.isArray(data)) {
-          data.__request_variant = { supply_type: crossdockBase.supply_type, selected_cluster_warehouses: [] };
-        }
-        return data;
-      } catch (errorNoWh) {
-        if (errorNoWh.status === 429) throw errorNoWh;
-        // Фоллбэк со складами
-        const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
-        try {
-          return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", crossdockBase, selectedWarehouses, slotOptions);
-        } catch (errorWh) {
-          if (errorWh.status === 429) throw errorWh;
-          // Прикрепляем сырой draft_info к ошибке для диагностики
-          errorWh.message = `${errorWh.message} [draft_info: ${draftInfoDump}] [no_wh_error: ${errorNoWh.message.slice(0, 300)}]`;
-          throw errorWh;
+      // Варианты для crossdock: только macrolocal_cluster_id, затем с storage если первый не вышел
+      const dropOffId = toPositiveIntegerId(getDropOffPointWarehouseId(candidate));
+      const crossdockVariants = [
+        macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id })),
+        dropOffId ? macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id, storage_warehouse_id: dropOffId })) : null,
+        macrolocalIds.slice(0, 20).map((id) => ({ cluster_id: id })),
+      ].filter(Boolean);
+      let lastError = null;
+      const variantErrors = [];
+      for (const supply_type of buildSupplyTypeVariants(crossdockBase.supply_type)) {
+        for (const selected_cluster_warehouses of crossdockVariants) {
+          try {
+            const data = await this.post("/v2/draft/timeslot/info", {
+              ...crossdockBase,
+              supply_type,
+              selected_cluster_warehouses,
+            }, slotOptions);
+            if (data && typeof data === "object" && !Array.isArray(data)) {
+              data.__request_variant = { supply_type, selected_cluster_warehouses };
+            }
+            return data;
+          } catch (error) {
+            lastError = error;
+            if (error.status === 429) throw error;
+            if (isSelectedClusterWarehousesValidationError(error) || isSupplyTypeValidationError(error)) {
+              variantErrors.push(`st=${supply_type} payload=${JSON.stringify(selected_cluster_warehouses)} -> ${(error.message || "").replace(/Если ошибка.*$/s, "").slice(0, 200)}`);
+              continue;
+            }
+            throw error;
+          }
         }
       }
+      if (lastError) {
+        lastError.message = `Crossdock не нашёл слот. [variant_errors: ${variantErrors.join(" || ")}] [draft_info: ${safeJsonSnippet(draftInfo, 1000)}]`;
+        Object.assign(lastError, { __needRecreateDraft: true });
+        throw lastError;
+      }
+      throw new Error("Crossdock: Ozon не принял ни один вариант selected_cluster_warehouses");
     }
     if (resolveDraftFlow(candidate) === "classic") {
       // classic flow и /v1/draft/timeslot/info отключены — идём через v2 как direct
@@ -2243,6 +2261,32 @@ function buildSelectedClusterWarehousesFromIds(clusterIds, warehouseIds) {
     }
   }
   return normalizeSelectedClusterWarehouses(result);
+}
+
+function extractCrossdockMacrolocalIds(draftInfo, candidate = {}) {
+  const ids = [];
+  const clusters = draftInfo && Array.isArray(draftInfo.clusters)
+    ? draftInfo.clusters
+    : draftInfo && draftInfo.result && Array.isArray(draftInfo.result.clusters)
+      ? draftInfo.result.clusters
+      : [];
+  for (const cluster of clusters) {
+    const id = toPositiveIntegerId(
+      cluster.macrolocal_cluster_id
+      || cluster.macrolocalClusterId
+      || cluster.cluster_id
+      || cluster.clusterId
+      || cluster.id,
+    );
+    if (id && id >= 1000) ids.push(id);
+  }
+  // Фоллбэк на cluster_ids кандидата (macrolocal)
+  if (!ids.length) {
+    for (const id of preferMacrolocalClusterIds(candidate.cluster_ids || [])) {
+      if (id >= 1000) ids.push(id);
+    }
+  }
+  return uniqueStrings(ids.map(String)).map(Number);
 }
 
 function buildSelectedClusterWarehousePayloadVariants(selectedWarehouses) {
