@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-23-macrolocal-id-priority";
+const APP_VERSION = "2026-06-24-macrolocal-refetch-no-stuck-flag";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -76,7 +76,7 @@ const OZON_DRAFT_CREATE_QUIET_PERIOD_MS = Number(process.env.OZON_DRAFT_CREATE_Q
 const OZON_DRAFT_CANDIDATE_DELAY_MS = 3000;
 const OZON_DRAFT_POLL_DELAY_MS = 2500;
 const OZON_SLOT_REQUEST_DELAY_MS = 3500;
-const OZON_SLOT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_SLOT_RATE_LIMIT_COOLDOWN_MS || 8000);
+const OZON_SLOT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_SLOT_RATE_LIMIT_COOLDOWN_MS || 12000);
 const OZON_BOOKING_RATE_LIMIT_COOLDOWN_MS = 180000;
 const OZON_SLOT_DRAFT_SPACING_MS = 30000;
 const OZON_AFTER_DRAFT_SLOT_DELAY_MS = 20000;
@@ -1540,7 +1540,8 @@ class OzonClient {
     }
 
     let selectedWarehouses = [];
-    if (draftId && !candidate.draft_info_rate_limited) {
+    // Пробуем draft_info каждый раз (429 временный, флаг не застревает навсегда)
+    if (draftId) {
       try {
         const draftInfo = await this.getSupplyDraftInfoByDraftId(draftId);
         selectedWarehouses = extractSelectedClusterWarehousesFromDraftInfo(
@@ -1552,12 +1553,35 @@ class OzonClient {
           candidate.selected_cluster_warehouses_source = "draft_info";
         }
       } catch (error) {
-        candidate.draft_info_rate_limited = error.status === 429;
+        // 429 пробрасываем — охотник сделает паузу и повторит весь шаг
         if (error.status === 429) throw error;
       }
     }
     if (!selectedWarehouses.length) {
       selectedWarehouses = normalizeSelectedClusterWarehouses(candidate.selected_cluster_warehouses);
+    }
+    // Если есть warehouse_ids, но нет macrolocal — добираем macrolocal по названию города
+    const cachedHasMacro = selectedWarehouses.some((item) => item.cluster_id && Number(item.cluster_id) >= 1000);
+    if (!cachedHasMacro) {
+      let macrolocalIds = preferMacrolocalClusterIds(candidate.cluster_ids || []).filter((id) => id >= 1000);
+      if (!macrolocalIds.length && candidate.warehouse && !candidate.macrolocal_lookup_done) {
+        try {
+          macrolocalIds = (await this.findMacrolocalClusterIdsForWarehouse(candidate.warehouse)).filter((id) => id >= 1000);
+          candidate.macrolocal_lookup_done = true;
+        } catch (error) {
+          if (error.status === 429) throw error;
+        }
+      }
+      if (macrolocalIds.length) {
+        const warehouseIds = selectedWarehouses.length
+          ? selectedWarehouses.map((item) => item.storage_warehouse_id)
+          : normalizePositiveOzonIds(candidate.warehouse_ids);
+        const rebuilt = buildSelectedClusterWarehousesFromIds(macrolocalIds, warehouseIds);
+        if (rebuilt.length) {
+          selectedWarehouses = rebuilt;
+          candidate.cluster_ids = uniqueStrings([...(candidate.cluster_ids || []).map(String), ...macrolocalIds.map(String)]);
+        }
+      }
     }
     if (!selectedWarehouses.length) {
       selectedWarehouses = buildSelectedClusterWarehousesFromIds(candidate.cluster_ids, candidate.warehouse_ids);
@@ -1575,7 +1599,7 @@ class OzonClient {
       throw Object.assign(
         new Error(
           "Этот черновик создан без macrolocal_cluster_id, который Ozon теперь требует для поиска слотов. " +
-          "Создайте поставку заново: загрузите Excel, нажмите «Создать черновики в Ozon», затем запустите охотника. " +
+          "Создайте поставку заново: загрузите Excel, нажмите «Подготовить», затем запустите охотника. " +
           "Старые черновики (созданные до обновления) больше не подходят.",
         ),
         { __needRecreateDraft: true },
