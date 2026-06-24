@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-crossdock-multi-variant-v2";
+const APP_VERSION = "2026-06-24-VERSION-CHECK-A1";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -3966,7 +3966,7 @@ async function attemptSlotHunterTarget(job, target) {
       raw_response: supply,
     });
   } catch (error) {
-    const message = error.message || "Ошибка Ozon API";
+    const message = (error.message || "Ошибка Ozon API") + ` [v:${APP_VERSION}]`;
     const status = Number(error && error.status);
     const isObsolete = isObsoleteMethodError(error);
     // Ошибка "пересоздайте черновик" — фатальная, нет смысла повторять
@@ -3977,7 +3977,7 @@ async function attemptSlotHunterTarget(job, target) {
       target.operation_id = cleanIdentifier(error.operationId);
     }
     // Показываем полное сообщение если в нём есть диагностика (crossdock variant_errors / draft_info)
-    const hasDiagnostics = /\[variant_errors:|\[draft_info:|\[debug:|\[crossdock/.test(message);
+    const hasDiagnostics = /\[variant_errors:|\[draft_info:|\[debug:|\[crossdock|\[v:/.test(message);
     target.error_message = status === 429 ? null : message;
     target.last_message = status === 429
       ? currentAction === "create_supply"
