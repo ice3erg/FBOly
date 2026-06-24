@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-crossdock-autodetect-from-draft";
+const APP_VERSION = "2026-06-24-crossdock-multi-variant-v2";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1503,7 +1503,8 @@ class OzonClient {
       if (candidate.__crossdock_check_done) {
         candidate.supply_mode = "crossdock";
         candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(directDraftInfo, candidate);
-        candidate.__crossdock_draft_dump = safeJsonSnippet(directDraftInfo, 900);
+        candidate.__crossdock_draft_dump = safeJsonSnippet(directDraftInfo, 1800);
+        candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(directDraftInfo);
       }
     }
     if (candidate.__crossdock_check_done) {
@@ -1516,10 +1517,19 @@ class OzonClient {
           supply_type: 2,
         };
         const dropOffId = toPositiveIntegerId(getDropOffPointWarehouseId(candidate));
-        const variants = [
-          macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id })),
-          dropOffId ? macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id, storage_warehouse_id: dropOffId })) : null,
-        ].filter(Boolean);
+        const draftWhIds = candidate.__crossdock_warehouse_ids || [];
+        // Перебираем варианты payload для crossdock
+        const variants = [];
+        // 1. только macrolocal
+        variants.push(macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id })));
+        // 2. macrolocal + storage из самого черновика (если есть)
+        if (draftWhIds.length) {
+          variants.push(macrolocalIds.flatMap((id) => draftWhIds.slice(0, 5).map((wh) => ({ macrolocal_cluster_id: id, storage_warehouse_id: wh }))).slice(0, 20));
+        }
+        // 3. macrolocal + drop-off как storage
+        if (dropOffId) {
+          variants.push(macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id, storage_warehouse_id: dropOffId })));
+        }
         let lastErr = null;
         const vErrors = [];
         for (const supply_type of [2, 1, 3]) {
@@ -1534,7 +1544,7 @@ class OzonClient {
               lastErr = error;
               if (error.status === 429) throw error;
               if (isSelectedClusterWarehousesValidationError(error) || isSupplyTypeValidationError(error)) {
-                vErrors.push(`st=${supply_type} ${JSON.stringify(selected_cluster_warehouses)} -> ${(error.message || "").replace(/Если ошибка.*$/s, "").slice(0, 180)}`);
+                vErrors.push(`st=${supply_type} ${JSON.stringify(selected_cluster_warehouses).slice(0, 120)} -> ${(error.message || "").replace(/Если ошибка.*$/s, "").replace(/Request validation error: /,"").slice(0, 150)}`);
                 continue;
               }
               throw error;
@@ -2317,6 +2327,30 @@ function buildSelectedClusterWarehousesFromIds(clusterIds, warehouseIds) {
     }
   }
   return normalizeSelectedClusterWarehouses(result);
+}
+
+function extractCrossdockWarehouseIds(draftInfo) {
+  const ids = [];
+  const clusters = draftInfo && Array.isArray(draftInfo.clusters)
+    ? draftInfo.clusters
+    : draftInfo && draftInfo.result && Array.isArray(draftInfo.result.clusters)
+      ? draftInfo.result.clusters
+      : [];
+  for (const cluster of clusters) {
+    const warehouses = Array.isArray(cluster.warehouses) ? cluster.warehouses : [];
+    for (const wh of warehouses) {
+      // storage_warehouse может быть объектом с id, или null
+      const sw = wh.storage_warehouse || wh.storageWarehouse;
+      const id = toPositiveIntegerId(
+        (sw && (sw.warehouse_id || sw.id || sw.warehouseId))
+        || wh.warehouse_id
+        || wh.storage_warehouse_id
+        || wh.supply_warehouse_id,
+      );
+      if (id) ids.push(id);
+    }
+  }
+  return uniqueStrings(ids.map(String)).map(Number);
 }
 
 function extractCrossdockMacrolocalIds(draftInfo, candidate = {}) {
@@ -3774,38 +3808,36 @@ async function attemptSlotHunterTarget(job, target) {
       return;
     } else if (!target.draft_reused_logged) {
       target.draft_reused_logged = true;
-      // Обогащаем кандидата macrolocal cluster_ids из draft_info (один раз при reuse)
+      // Обогащаем кандидата из draft_info один раз при reuse
       if (!target.candidate.macrolocal_lookup_done) {
         try {
           const draftInfo = await job.client.getSupplyDraftInfoByDraftId(target.draft_id);
-          // Диагностика: сохраняем сырой ответ для отладки crossdock
-          target.candidate.__draft_info_debug = safeJsonSnippet(draftInfo, 1500);
-          const draftWarehouses = extractSelectedClusterWarehousesFromDraftInfo(draftInfo, target.candidate.cluster_ids);
-          if (draftWarehouses.length) {
-            target.candidate.selected_cluster_warehouses = draftWarehouses;
-            target.candidate.selected_cluster_warehouses_source = "draft_info";
-            const macrolocalFromDraft = draftWarehouses
-              .map((item) => item.cluster_id)
-              .filter((id) => id && Number(id) >= 1000)
-              .map(String);
-            if (macrolocalFromDraft.length) {
-              target.candidate.cluster_ids = uniqueStrings([
-                ...(target.candidate.cluster_ids || []).map(String),
-                ...macrolocalFromDraft,
-              ]);
-              target.candidate.macrolocal_lookup_done = true;
-            }
-          }
-          // Фоллбэк: если draft_info не дал macrolocal — ищем по названию города
-          const haveMacrolocal = preferMacrolocalClusterIds(target.candidate.cluster_ids || []).some((id) => id >= 1000);
-          if (!haveMacrolocal && target.candidate.warehouse) {
-            const macrolocalByName = (await job.client.findMacrolocalClusterIdsForWarehouse(target.candidate.warehouse)).filter((id) => id >= 1000);
-            if (macrolocalByName.length) {
-              target.candidate.cluster_ids = uniqueStrings([
-                ...(target.candidate.cluster_ids || []).map(String),
-                ...macrolocalByName.map(String),
-              ]);
-              target.candidate.macrolocal_lookup_done = true;
+          const clusters = draftInfo && Array.isArray(draftInfo.clusters) ? draftInfo.clusters : [];
+          // Определяем crossdock прямо из черновика
+          const isCrossdock = clusters.some((c) => String(c.supply_type || "").toUpperCase() === "CROSSDOCK");
+          if (isCrossdock) {
+            target.candidate.supply_mode = "crossdock";
+            target.candidate.__crossdock_check_done = true;
+            target.candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(draftInfo, target.candidate);
+            target.candidate.__crossdock_draft_dump = safeJsonSnippet(draftInfo, 900);
+            target.candidate.macrolocal_lookup_done = true;
+          } else {
+            // Direct: достаём selected_cluster_warehouses со складами
+            const draftWarehouses = extractSelectedClusterWarehousesFromDraftInfo(draftInfo, target.candidate.cluster_ids);
+            if (draftWarehouses.length) {
+              target.candidate.selected_cluster_warehouses = draftWarehouses;
+              target.candidate.selected_cluster_warehouses_source = "draft_info";
+              const macrolocalFromDraft = draftWarehouses
+                .map((item) => item.cluster_id)
+                .filter((id) => id && Number(id) >= 1000)
+                .map(String);
+              if (macrolocalFromDraft.length) {
+                target.candidate.cluster_ids = uniqueStrings([
+                  ...(target.candidate.cluster_ids || []).map(String),
+                  ...macrolocalFromDraft,
+                ]);
+                target.candidate.macrolocal_lookup_done = true;
+              }
             }
           }
         } catch (error) {
