@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-recreate-debug-dump";
+const APP_VERSION = "2026-06-24-crossdock-no-warehouses-timeslot";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1426,13 +1426,26 @@ class OzonClient {
     };
     if (isCrossdockCandidate(candidate)) {
       // /v1/draft/timeslot/info отключён Ozon 16.03.2026 — используем только v2
-      const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
-      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", {
+      // Для crossdock сначала пробуем БЕЗ selected_cluster_warehouses (таймслот привязан
+      // к точке отгрузки, а не к складам назначения), затем с ними как фоллбэк.
+      const crossdockBase = {
         draft_id: numericDraftId || draftId,
         date_from: dateFrom,
         date_to: dateTo,
         supply_type: resolveSupplyType(candidate),
-      }, selectedWarehouses, slotOptions);
+      };
+      try {
+        const data = await this.post("/v2/draft/timeslot/info", crossdockBase, slotOptions);
+        if (data && typeof data === "object" && !Array.isArray(data)) {
+          data.__request_variant = { supply_type: crossdockBase.supply_type, selected_cluster_warehouses: [] };
+        }
+        return data;
+      } catch (error) {
+        if (error.status === 429) throw error;
+        // Без складов не вышло — пробуем с selected_cluster_warehouses
+        const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
+        return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", crossdockBase, selectedWarehouses, slotOptions);
+      }
     }
     if (resolveDraftFlow(candidate) === "classic") {
       // classic flow и /v1/draft/timeslot/info отключены — идём через v2 как direct
@@ -1612,6 +1625,7 @@ class OzonClient {
         warehouse: candidate.warehouse,
         supply_mode: candidate.supply_mode,
         selected: selectedWarehouses.slice(0, 3),
+        draft_info: candidate.__draft_info_debug || "нет",
       });
       throw Object.assign(
         new Error(
@@ -3649,6 +3663,8 @@ async function attemptSlotHunterTarget(job, target) {
       if (!target.candidate.macrolocal_lookup_done) {
         try {
           const draftInfo = await job.client.getSupplyDraftInfoByDraftId(target.draft_id);
+          // Диагностика: сохраняем сырой ответ для отладки crossdock
+          target.candidate.__draft_info_debug = safeJsonSnippet(draftInfo, 1500);
           const draftWarehouses = extractSelectedClusterWarehousesFromDraftInfo(draftInfo, target.candidate.cluster_ids);
           if (draftWarehouses.length) {
             target.candidate.selected_cluster_warehouses = draftWarehouses;
