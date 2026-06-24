@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-macrolocal-diag-fatal";
+const APP_VERSION = "2026-06-24-macrolocal-from-draft-on-reuse";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1793,6 +1793,7 @@ class OzonClient {
       status: draftId ? "created" : "accepted",
       items_count: items.length,
       total_quantity: items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+      cluster_ids: clusterIds.map(String), // macrolocal ids использованные при создании
       selected_cluster_warehouses: [],
       selected_cluster_warehouses_source: null,
       supply_type: 1,
@@ -3586,6 +3587,13 @@ async function attemptSlotHunterTarget(job, target) {
         target.candidate.selected_cluster_warehouses = draft.selected_cluster_warehouses;
         target.candidate.selected_cluster_warehouses_source = draft.selected_cluster_warehouses_source || "draft_info";
       }
+      // Сохраняем macrolocal cluster_ids из создания черновика — они точно правильные
+      if (Array.isArray(draft.cluster_ids) && draft.cluster_ids.length) {
+        target.candidate.cluster_ids = uniqueStrings([
+          ...(target.candidate.cluster_ids || []).map(String),
+          ...draft.cluster_ids.map(String),
+        ]);
+      }
       if (Array.isArray(draft.warehouse_ids) && draft.warehouse_ids.length) {
         target.candidate.warehouse_ids = draft.warehouse_ids;
       }
@@ -3627,16 +3635,34 @@ async function attemptSlotHunterTarget(job, target) {
       return;
     } else if (!target.draft_reused_logged) {
       target.draft_reused_logged = true;
-      addSlotHunterAttempt(
-        job,
-        target,
-        "reuse_draft",
-        "success",
-        `Берём готовый API-черновик ${target.draft_id} и сразу ищем слот`,
-        { operation_id: target.operation_id, draft_id: target.draft_id },
-      );
+      // Обогащаем кандидата macrolocal cluster_ids из draft_info (один раз при reuse)
+      if (!target.candidate.macrolocal_lookup_done) {
+        try {
+          const draftInfo = await job.client.getSupplyDraftInfoByDraftId(target.draft_id);
+          const draftWarehouses = extractSelectedClusterWarehousesFromDraftInfo(draftInfo, target.candidate.cluster_ids);
+          if (draftWarehouses.length) {
+            target.candidate.selected_cluster_warehouses = draftWarehouses;
+            target.candidate.selected_cluster_warehouses_source = "draft_info";
+            target.candidate.macrolocal_lookup_done = true;
+            // Обновляем cluster_ids macrolocal ids из черновика
+            const macrolocalFromDraft = draftWarehouses
+              .map((item) => item.cluster_id)
+              .filter((id) => id && Number(id) >= 1000)
+              .map(String);
+            if (macrolocalFromDraft.length) {
+              target.candidate.cluster_ids = uniqueStrings([
+                ...(target.candidate.cluster_ids || []).map(String),
+                ...macrolocalFromDraft,
+              ]);
+            }
+          }
+        } catch (error) {
+          if (error.status === 429) throw error;
+          // Игнорируем другие ошибки — попробуем без обогащения
+        }
+      }
       target.status = "draft_ready";
-      target.last_message = `API draft ${target.draft_id} is ready. Waiting briefly before checking slots`;
+      target.last_message = `Черновик готов, ищем слот`;
       scheduleSlotTargetDelay(job, target, OZON_AFTER_DRAFT_SLOT_DELAY_MS);
       job.draft_phase_until = target.next_attempt_at;
       return;
