@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-crossdock-no-warehouses-timeslot";
+const APP_VERSION = "2026-06-24-crossdock-draft-info-dump";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1425,26 +1425,41 @@ class OzonClient {
       rateLimitCooldownMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
     };
     if (isCrossdockCandidate(candidate)) {
+      // ДИАГНОСТИКА: получаем сырой ответ draft/create/info, чтобы увидеть реальную структуру
+      let draftInfoDump = "нет";
+      try {
+        const draftInfo = await this.getSupplyDraftInfoByDraftId(draftId);
+        draftInfoDump = safeJsonSnippet(draftInfo, 2000);
+      } catch (e) {
+        if (e.status === 429) throw e;
+        draftInfoDump = `ошибка draft_info: ${e.message}`;
+      }
       // /v1/draft/timeslot/info отключён Ozon 16.03.2026 — используем только v2
-      // Для crossdock сначала пробуем БЕЗ selected_cluster_warehouses (таймслот привязан
-      // к точке отгрузки, а не к складам назначения), затем с ними как фоллбэк.
       const crossdockBase = {
         draft_id: numericDraftId || draftId,
         date_from: dateFrom,
         date_to: dateTo,
         supply_type: resolveSupplyType(candidate),
       };
+      // Пробуем БЕЗ selected_cluster_warehouses (crossdock привязан к точке отгрузки)
       try {
         const data = await this.post("/v2/draft/timeslot/info", crossdockBase, slotOptions);
         if (data && typeof data === "object" && !Array.isArray(data)) {
           data.__request_variant = { supply_type: crossdockBase.supply_type, selected_cluster_warehouses: [] };
         }
         return data;
-      } catch (error) {
-        if (error.status === 429) throw error;
-        // Без складов не вышло — пробуем с selected_cluster_warehouses
+      } catch (errorNoWh) {
+        if (errorNoWh.status === 429) throw errorNoWh;
+        // Фоллбэк со складами
         const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
-        return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", crossdockBase, selectedWarehouses, slotOptions);
+        try {
+          return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", crossdockBase, selectedWarehouses, slotOptions);
+        } catch (errorWh) {
+          if (errorWh.status === 429) throw errorWh;
+          // Прикрепляем сырой draft_info к ошибке для диагностики
+          errorWh.message = `${errorWh.message} [draft_info: ${draftInfoDump}] [no_wh_error: ${errorNoWh.message.slice(0, 300)}]`;
+          throw errorWh;
+        }
       }
     }
     if (resolveDraftFlow(candidate) === "classic") {
@@ -3835,7 +3850,7 @@ async function attemptSlotHunterTarget(job, target) {
         ? "Слот найден, Ozon ограничил бронь. Повторим бронь после паузы"
         : "Пауза из-за лимита Ozon, повторим автоматически"
       : needRecreate
-        ? `Черновик устарел. Создайте поставку заново. ${(message.match(/\[debug:.*\]/) || [""])[0]}`
+        ? `Черновик устарел. ${message}`
         : isRequestRejected
           ? "Ozon отклонил запрос. Остановил повторы по этому городу, чтобы не крутить ошибку бесконечно"
           : message;
