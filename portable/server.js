@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-macrolocal-from-draft-on-reuse";
+const APP_VERSION = "2026-06-24-crossdock-macrolocal-fallback";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1685,6 +1685,7 @@ class OzonClient {
         status: draftId ? "created" : "accepted",
         items_count: items.length,
         total_quantity: items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+        cluster_ids: clusterIds.map(String), // macrolocal ids использованные при создании
         selected_cluster_warehouses: [],
         selected_cluster_warehouses_source: null,
         supply_type: 2,
@@ -3643,8 +3644,6 @@ async function attemptSlotHunterTarget(job, target) {
           if (draftWarehouses.length) {
             target.candidate.selected_cluster_warehouses = draftWarehouses;
             target.candidate.selected_cluster_warehouses_source = "draft_info";
-            target.candidate.macrolocal_lookup_done = true;
-            // Обновляем cluster_ids macrolocal ids из черновика
             const macrolocalFromDraft = draftWarehouses
               .map((item) => item.cluster_id)
               .filter((id) => id && Number(id) >= 1000)
@@ -3654,6 +3653,19 @@ async function attemptSlotHunterTarget(job, target) {
                 ...(target.candidate.cluster_ids || []).map(String),
                 ...macrolocalFromDraft,
               ]);
+              target.candidate.macrolocal_lookup_done = true;
+            }
+          }
+          // Фоллбэк: если draft_info не дал macrolocal — ищем по названию города
+          const haveMacrolocal = preferMacrolocalClusterIds(target.candidate.cluster_ids || []).some((id) => id >= 1000);
+          if (!haveMacrolocal && target.candidate.warehouse) {
+            const macrolocalByName = (await job.client.findMacrolocalClusterIdsForWarehouse(target.candidate.warehouse)).filter((id) => id >= 1000);
+            if (macrolocalByName.length) {
+              target.candidate.cluster_ids = uniqueStrings([
+                ...(target.candidate.cluster_ids || []).map(String),
+                ...macrolocalByName.map(String),
+              ]);
+              target.candidate.macrolocal_lookup_done = true;
             }
           }
         } catch (error) {
