@@ -2475,78 +2475,23 @@ function DraftCreationPanel({
                     {item.ok ? (
                       <div className="mt-1 space-y-1 text-xs text-muted-foreground">
                         <div>
-                          {item.draft_id ? "Черновик создан в Ozon" : item.operation_id ? "Запрос принят Ozon" : ""}
-                          {item.status ? ` · статус: ${item.status}` : ""}
+                          {item.draft_id ? "Черновик подготовлен" : item.operation_id ? "Запрос принят Ozon" : ""}
                         </div>
-                        {item.attempts_count && (
-                          <div>Попыток backend: {item.attempts_count}</div>
-                        )}
                         {(item.items_count || item.total_quantity) && (
                           <div>
-                            Отправлено в запросе: {item.items_count ?? "-"} SKU, {item.total_quantity ?? "-"} шт.
+                            {item.items_count ?? "-"} SKU · {item.total_quantity ?? "-"} шт.
                           </div>
-                        )}
-                        {item.ozon_response && (
-                          <details className="rounded bg-muted/50 p-2">
-                            <summary className="cursor-pointer font-sans text-xs text-muted-foreground">
-                              Технические детали
-                            </summary>
-                            <div className="mt-2 break-words font-mono text-[11px]">
-                              Ответ Ozon: {item.ozon_response}
-                            </div>
-                          </details>
                         )}
                       </div>
                     ) : (
                       <div className="mt-1 space-y-1 text-xs text-muted-foreground">
-                        <div>{item.error ?? "Ozon не вернул подробности"}</div>
-                        {item.operation_id && (
-                          <div>operation_id: {item.operation_id}</div>
-                        )}
-                        {item.attempts_count && (
-                          <div>Попыток backend: {item.attempts_count}</div>
-                        )}
-                        {(item.endpoint ||
-                          item.http_status ||
-                          item.ozon_response ||
-                          (item.classic_cluster_ids && item.classic_cluster_ids.length > 0) ||
-                          (item.cluster_ids && item.cluster_ids.length > 0) ||
-                          (item.recent_ozon_requests && item.recent_ozon_requests.length > 0)) && (
-                          <details className="mt-2 rounded bg-muted/50 p-2">
-                            <summary className="cursor-pointer font-sans text-xs text-muted-foreground">
-                              Технические детали
-                            </summary>
-                            <div className="mt-2 space-y-1 break-words font-mono text-[11px]">
-                              {(item.endpoint || item.http_status) && (
-                                <div>
-                                  endpoint: {item.endpoint ?? "-"}
-                                  {item.http_status ? `, статус: ${item.http_status}` : ""}
-                                </div>
-                              )}
-                              {item.classic_cluster_ids && item.classic_cluster_ids.length > 0 && (
-                                <div>classic cluster IDs: {item.classic_cluster_ids.join(", ")}</div>
-                              )}
-                              {item.cluster_ids && item.cluster_ids.length > 0 && (
-                                <div>cluster IDs: {item.cluster_ids.join(", ")}</div>
-                              )}
-                              {item.ozon_response && <div>{item.ozon_response}</div>}
-                              {item.recent_ozon_requests && item.recent_ozon_requests.length > 0 && (
-                                <div className="space-y-1">
-                                  <div className="font-sans text-xs text-foreground">
-                                    Последние реальные запросы к Ozon
-                                  </div>
-                                  {item.recent_ozon_requests.slice(0, 8).map((request, index) => (
-                                    <div key={`${request.at}-${index}`} className="break-words">
-                                      {formatDateTime(request.at)} · {request.path} · HTTP {request.status}
-                                      {request.payload ? ` · ${JSON.stringify(request.payload)}` : ""}
-                                      {request.response_text ? ` · ${request.response_text}` : ""}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </details>
-                        )}
+                        <div>
+                          {item.http_status === 429
+                            ? "Лимит Ozon, повторяем автоматически"
+                            : item.error
+                              ? cleanOzonError(item.error)
+                              : "Не удалось подготовить, повторите"}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -3447,6 +3392,19 @@ function getDraftRetryWaitSeconds(attempt: number, result?: DraftCreationResult 
     return Math.min(120, Math.max(5, retryAfterSeconds));
   }
   return [10, 20, 30, 45][Math.max(0, attempt - 1)] ?? 60;
+}
+
+function cleanOzonError(error: string): string {
+  if (!error) return "Не удалось подготовить, повторите";
+  let text = String(error);
+  // Убираем технический мусор: [v:...], [debug:...], [variant_errors:...], [draft_info:...]
+  text = text.replace(/\[(v|debug|variant_errors|draft_info|crossdock[^\]]*):[^\]]*\]/g, "");
+  // Убираем подсказку про "пришлите этот текст"
+  text = text.replace(/Если ошибка[\s\S]*$/, "");
+  // Частые случаи — человеческий текст
+  if (/rate limit|429/i.test(text)) return "Лимит Ozon, повторяем автоматически";
+  if (/obsolete method/i.test(text)) return "Устаревший метод Ozon, обновите страницу";
+  return text.trim() || "Не удалось подготовить, повторите";
 }
 
 function formatDateTime(value: string | null | undefined) {

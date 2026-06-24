@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-VERSION-CHECK-A1";
+const APP_VERSION = "2026-06-25-clean-ui-draft-spacing";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -87,7 +87,7 @@ const OZON_DRAFT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_DRAFT_RATE_LIM
 const OZON_DRAFT_CREATE_ROUTE_MAX_ATTEMPTS = Number(process.env.OZON_DRAFT_CREATE_ROUTE_MAX_ATTEMPTS || 1);
 const DRAFT_CREATION_JOB_RATE_LIMIT_COOLDOWN_MS = Number(process.env.DRAFT_CREATION_JOB_RATE_LIMIT_COOLDOWN_MS || 25000);
 const DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET = Number(process.env.DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET || 8);
-const DRAFT_CREATION_SPACING_MS = Number(process.env.DRAFT_CREATION_SPACING_MS || 7000);
+const DRAFT_CREATION_SPACING_MS = Number(process.env.DRAFT_CREATION_SPACING_MS || 12000);
 const TARGET_STOCK_DAYS = 21;
 const ANALYTICS_PERIOD_DAYS = 30;
 const MIN_OUTPUT_CLUSTER_QUANTITY = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 15);
