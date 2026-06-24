@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-24-crossdock-macrolocal-fallback";
+const APP_VERSION = "2026-06-24-recreate-debug-dump";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1605,10 +1605,19 @@ class OzonClient {
     // v2 требует macrolocal_cluster_id > 0 (и это большой id >= 1000, не classic).
     const hasMacrolocalCluster = selectedWarehouses.some((item) => item.cluster_id && Number(item.cluster_id) >= 1000);
     if (!hasMacrolocalCluster) {
+      const diag = JSON.stringify({
+        cluster_ids: candidate.cluster_ids || [],
+        classic_cluster_ids: candidate.classic_cluster_ids || [],
+        warehouse_ids: (candidate.warehouse_ids || []).slice(0, 5),
+        warehouse: candidate.warehouse,
+        supply_mode: candidate.supply_mode,
+        selected: selectedWarehouses.slice(0, 3),
+      });
       throw Object.assign(
         new Error(
           "Не удалось найти macrolocal_cluster_id для этого черновика. " +
-          "Пересоздайте поставку: нажмите «Подготовить» и запустите охотника заново.",
+          "Пересоздайте поставку: нажмите «Подготовить» и запустите охотника заново. " +
+          `[debug: ${diag}]`,
         ),
         { __needRecreateDraft: true },
       );
@@ -3810,7 +3819,7 @@ async function attemptSlotHunterTarget(job, target) {
         ? "Слот найден, Ozon ограничил бронь. Повторим бронь после паузы"
         : "Пауза из-за лимита Ozon, повторим автоматически"
       : needRecreate
-        ? "Черновик устарел. Создайте поставку заново и запустите охотника"
+        ? `Черновик устарел. Создайте поставку заново. ${(message.match(/\[debug:.*\]/) || [""])[0]}`
         : isRequestRejected
           ? "Ozon отклонил запрос. Остановил повторы по этому городу, чтобы не крутить ошибку бесконечно"
           : message;
