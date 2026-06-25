@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-direct-from-draft-no-crossdock-fast";
+const APP_VERSION = "2026-06-25-direct-no-warehouses-first";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1606,16 +1606,25 @@ class OzonClient {
         }
       }
     }
-    const selectedWarehouses = candidate.__direct_selected_warehouses?.length
-      ? candidate.__direct_selected_warehouses
-      : await this.resolveSelectedClusterWarehouses(draftId, candidate);
-    const basePayload = {
+    // DIRECT: сначала пробуем без selected_cluster_warehouses —
+    // Ozon сам знает склады из черновика. storage_warehouse_id при DIRECT
+    // может быть запрещён ('when supply type is DIRECT, invalid storage_warehouse_id').
+    const directBase = {
       draft_id: numericDraftId || draftId,
       date_from: dateFrom,
       date_to: dateTo,
-      supply_type: 1, // DIRECT
+      supply_type: 1,
     };
-    return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", basePayload, selectedWarehouses, slotOptions);
+    try {
+      return await this.post("/v2/draft/timeslot/info", directBase, slotOptions);
+    } catch (error) {
+      if (error.status === 429) throw error;
+      // Без selected_cluster_warehouses не вышло — пробуем с ними
+      const selectedWarehouses = candidate.__direct_selected_warehouses?.length
+        ? candidate.__direct_selected_warehouses
+        : await this.resolveSelectedClusterWarehouses(draftId, candidate);
+      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", directBase, selectedWarehouses, slotOptions);
+    }
   }
   async createSupplyFromDraft(draftId, selectedSlot, settings = {}, candidate = {}) {
     // /v1/draft/supply/create отключён Ozon 16.03.2026 — для всех flow используем v2
