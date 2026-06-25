@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-direct-warehouse-ids";
+const APP_VERSION = "2026-06-25-direct-type-resolved-fix";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1433,6 +1433,8 @@ class OzonClient {
         if (e.status === 429) throw e;
         return null;
       });
+      // Ставим флаг всегда, даже при null — иначе каждая попытка бьёт draft/create/info
+      candidate.__draft_type_resolved = true;
       if (info) {
         const clusters = Array.isArray(info.clusters) ? info.clusters : [];
         const supplyTypesInDraft = clusters
@@ -1440,20 +1442,25 @@ class OzonClient {
           .filter(Boolean);
         const isCd = supplyTypesInDraft.some((t) => t.includes("CROSSDOCK"))
           || String(info.supply_type || info.supplyType || "").toUpperCase().includes("CROSSDOCK");
-        candidate.__draft_type_resolved = true;
         candidate.__draft_is_crossdock = isCd;
         candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(info, candidate);
         candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(info);
         candidate.__crossdock_draft_dump = safeJsonSnippet(info, 1500);
+        // Для DIRECT — кэшируем warehouses из draft_info
+        if (!isCd) {
+          candidate.__direct_warehouse_ids_from_draft = extractAvailableWarehouseIdsFromDraftInfo(info).map(Number).filter(Boolean);
+          candidate.__direct_draft_dump = safeJsonSnippet(info, 800);
+        }
         if (isCd) candidate.supply_mode = "crossdock";
+      } else {
+        // draft_info недоступен — определяем по полям кандидата, но не по drop_off
+        // (drop_off есть у всех кандидатов кластера, не только crossdock)
+        candidate.__draft_is_crossdock = Boolean(candidate.supply_mode === "crossdock");
       }
     }
 
     // CROSSDOCK обработка — доверяем draft_info над полями кандидата
-    const isDraftResolved = Boolean(candidate.__draft_type_resolved);
-    const isDraftCrossdock = isDraftResolved
-      ? Boolean(candidate.__draft_is_crossdock)  // берём из черновика
-      : isCrossdockCandidate(candidate);          // фоллбэк если draft_info не успел
+    const isDraftCrossdock = Boolean(candidate.__draft_is_crossdock);
 
     if (isDraftCrossdock) {
       const macrolocalIds = (candidate.__crossdock_macrolocal && candidate.__crossdock_macrolocal.length)
@@ -1611,9 +1618,11 @@ class OzonClient {
     // а не selected_cluster_warehouses. При DIRECT storage_warehouse_id запрещён в
     // selected_cluster_warehouses — Ozon отвечает 'invalid storage warehouse_id'.
     const directWarehouseIds = (
-      (candidate.__direct_selected_warehouses || []).map((w) => w.storage_warehouse_id).filter(Boolean).length
-        ? candidate.__direct_selected_warehouses.map((w) => w.storage_warehouse_id).filter(Boolean)
-        : normalizePositiveOzonIds(candidate.warehouse_ids)
+      (candidate.__direct_warehouse_ids_from_draft || []).length
+        ? candidate.__direct_warehouse_ids_from_draft
+        : (candidate.__direct_selected_warehouses || []).map((w) => w.storage_warehouse_id).filter(Boolean).length
+          ? candidate.__direct_selected_warehouses.map((w) => w.storage_warehouse_id).filter(Boolean)
+          : normalizePositiveOzonIds(candidate.warehouse_ids)
     );
     const directBase = {
       draft_id: numericDraftId || draftId,
@@ -3925,11 +3934,17 @@ async function attemptSlotHunterTarget(job, target) {
             target.candidate.__crossdock_draft_dump = safeJsonSnippet(draftInfo, 900);
             target.candidate.macrolocal_lookup_done = true;
           } else {
-            // Direct: достаём selected_cluster_warehouses со складами
+            // Direct: достаём warehouse_ids со складов назначения
+            const availableWarehouseIds = extractAvailableWarehouseIdsFromDraftInfo(draftInfo);
+            if (availableWarehouseIds.length) {
+              target.candidate.warehouse_ids = availableWarehouseIds;
+            }
+            // Также достаём selected_cluster_warehouses для resolveSelectedClusterWarehouses
             const draftWarehouses = extractSelectedClusterWarehousesFromDraftInfo(draftInfo, target.candidate.cluster_ids);
             if (draftWarehouses.length) {
               target.candidate.selected_cluster_warehouses = draftWarehouses;
               target.candidate.selected_cluster_warehouses_source = "draft_info";
+              target.candidate.__direct_selected_warehouses = draftWarehouses;
               const macrolocalFromDraft = draftWarehouses
                 .map((item) => item.cluster_id)
                 .filter((id) => id && Number(id) >= 1000)
@@ -3942,6 +3957,11 @@ async function attemptSlotHunterTarget(job, target) {
                 target.candidate.macrolocal_lookup_done = true;
               }
             }
+            target.candidate.__direct_draft_dump = safeJsonSnippet(draftInfo, 900);
+            // Помечаем тип черновика как определённый — чтобы не запрашивать повторно
+            target.candidate.__draft_type_resolved = true;
+            target.candidate.__draft_is_crossdock = false;
+            target.candidate.__crossdock_check_done = false;
           }
         } catch (error) {
           if (error.status === 429) throw error;
