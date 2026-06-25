@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-crossdock-macrolocal-only";
+const APP_VERSION = "2026-06-25-trust-draft-type";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1449,8 +1449,13 @@ class OzonClient {
       }
     }
 
-    // CROSSDOCK обработка (определено по самому черновику или по полям кандидата)
-    if (candidate.__draft_is_crossdock || isCrossdockCandidate(candidate)) {
+    // CROSSDOCK обработка — доверяем draft_info над полями кандидата
+    const isDraftResolved = Boolean(candidate.__draft_type_resolved);
+    const isDraftCrossdock = isDraftResolved
+      ? Boolean(candidate.__draft_is_crossdock)  // берём из черновика
+      : isCrossdockCandidate(candidate);          // фоллбэк если draft_info не успел
+
+    if (isDraftCrossdock) {
       const macrolocalIds = (candidate.__crossdock_macrolocal && candidate.__crossdock_macrolocal.length)
         ? candidate.__crossdock_macrolocal
         : extractCrossdockMacrolocalIds(await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => { if (e.status === 429) throw e; return null; }), candidate);
