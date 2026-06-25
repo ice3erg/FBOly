@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-direct-no-warehouses-first";
+const APP_VERSION = "2026-06-25-direct-diag-dump";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1541,6 +1541,7 @@ class OzonClient {
         } else {
           // DIRECT — кэшируем warehouses прямо сейчас
           candidate.__direct_selected_warehouses = extractSelectedClusterWarehousesFromDraftInfo(directDraftInfo, candidate.cluster_ids);
+          candidate.__direct_draft_dump = safeJsonSnippet(directDraftInfo, 800);
         }
       }
     }
@@ -1619,11 +1620,19 @@ class OzonClient {
       return await this.post("/v2/draft/timeslot/info", directBase, slotOptions);
     } catch (error) {
       if (error.status === 429) throw error;
+      const firstErr = (error.message || "").replace(/Если ошибка.*$/s, "").slice(0, 120);
       // Без selected_cluster_warehouses не вышло — пробуем с ними
       const selectedWarehouses = candidate.__direct_selected_warehouses?.length
         ? candidate.__direct_selected_warehouses
         : await this.resolveSelectedClusterWarehouses(draftId, candidate);
-      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", directBase, selectedWarehouses, slotOptions);
+      try {
+        return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", directBase, selectedWarehouses, slotOptions);
+      } catch (error2) {
+        if (error2.status === 429) throw error2;
+        const diag = `[no-wh: ${firstErr}] [with-wh: ${(error2.message || "").replace(/Если ошибка.*$/s, "").slice(0, 120)}] [warehouses: ${JSON.stringify(selectedWarehouses.slice(0, 2))}] [draft_dump: ${candidate.__crossdock_draft_dump || candidate.__direct_draft_dump || "нет"}]`;
+        error2.message = `${error2.message} ${diag}`;
+        throw error2;
+      }
     }
   }
   async createSupplyFromDraft(draftId, selectedSlot, settings = {}, candidate = {}) {
