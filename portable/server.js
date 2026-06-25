@@ -4102,7 +4102,7 @@ async function attemptSlotHunterTarget(job, target) {
       target.operation_id = cleanIdentifier(error.operationId);
     }
     // Показываем полное сообщение если в нём есть диагностика (crossdock variant_errors / draft_info)
-    const hasDiagnostics = /\[variant_errors:|\[draft_info:|\[debug:|\[crossdock|\[v:/.test(message);
+    const hasDiagnostics = /\[variant_errors:|\[draft_info:|\[debug:|\[crossdock|\[v:|DIRECT_DIAG/.test(message);
     target.error_message = status === 429 ? null : message;
     target.last_message = status === 429
       ? currentAction === "create_supply"
