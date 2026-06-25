@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-direct-type-diag";
+const APP_VERSION = "2026-06-25-fix-crossdock-detection";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1437,11 +1437,10 @@ class OzonClient {
       candidate.__draft_type_resolved = true;
       if (info) {
         const clusters = Array.isArray(info.clusters) ? info.clusters : [];
-        const supplyTypesInDraft = clusters
-          .map((c) => String(c.supply_type || c.supplyType || "").toUpperCase())
-          .filter(Boolean);
-        const isCd = supplyTypesInDraft.some((t) => t.includes("CROSSDOCK"))
-          || String(info.supply_type || info.supplyType || "").toUpperCase().includes("CROSSDOCK");
+        // Тип черновика — только из верхнего уровня draft_info, НЕ из clusters.supply_type
+        // (clusters.supply_type показывает доступные типы кластера, не тип черновика)
+        const draftSupplyType = String(info.supply_type || info.supplyType || info.create_type || info.createType || "").toUpperCase();
+        const isCd = draftSupplyType.includes("CROSSDOCK") || draftSupplyType === "2";
         candidate.__draft_is_crossdock = isCd;
         candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(info, candidate);
         candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(info);
@@ -1453,7 +1452,7 @@ class OzonClient {
         }
         if (isCd) candidate.supply_mode = "crossdock";
         // Диагностика: логируем что определили
-        candidate.__draft_type_diag = `isCd=${isCd} supply_type="${info.supply_type||""}" cluster_supply_types=[${supplyTypesInDraft.join(",")}] wh_ids=${JSON.stringify((candidate.__direct_warehouse_ids_from_draft||[]).slice(0,2))}`;
+        candidate.__draft_type_diag = `isCd=${isCd} draftSupplyType="${draftSupplyType}" wh_ids=${JSON.stringify((candidate.__direct_warehouse_ids_from_draft||[]).slice(0,2))}`;
       } else {
         // draft_info недоступен — определяем по полям кандидата, но не по drop_off
         // (drop_off есть у всех кандидатов кластера, не только crossdock)
@@ -1538,9 +1537,8 @@ class OzonClient {
         return null;
       });
       if (directDraftInfo) {
-        const directClusters = Array.isArray(directDraftInfo.clusters) ? directDraftInfo.clusters : [];
-        const isCd = directClusters.some((c) => String(c.supply_type || c.supplyType || "").toUpperCase().includes("CROSSDOCK"))
-          || String(directDraftInfo.supply_type || directDraftInfo.supplyType || "").toUpperCase().includes("CROSSDOCK");
+        const draftSupplyTypeStr = String(directDraftInfo.supply_type || directDraftInfo.supplyType || directDraftInfo.create_type || directDraftInfo.createType || "").toUpperCase();
+        const isCd = draftSupplyTypeStr.includes("CROSSDOCK") || draftSupplyTypeStr === "2";
         candidate.__crossdock_check_done = isCd;
         if (isCd) {
           candidate.supply_mode = "crossdock";
