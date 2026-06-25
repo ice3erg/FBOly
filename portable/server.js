@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-crossdock-detect-by-dropoff";
+const APP_VERSION = "2026-06-25-crossdock-macrolocal-only";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1424,11 +1424,36 @@ class OzonClient {
       base429DelayMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
       rateLimitCooldownMs: OZON_SLOT_RATE_LIMIT_COOLDOWN_MS,
     };
-    if (isCrossdockCandidate(candidate)) {
-      // Crossdock: у черновика storage_warehouse = null (склад определяется после
-      // сортировки). Поэтому в selected_cluster_warehouses шлём ТОЛЬКО macrolocal_cluster_id.
-      const draftInfo = await this.getSupplyDraftInfoByDraftId(draftId);
-      const macrolocalIds = extractCrossdockMacrolocalIds(draftInfo, candidate);
+
+    // НАДЁЖНОЕ определение типа: грузим draft_info ОДИН раз и смотрим supply_type
+    // самого черновика. Поля кандидата (supply_mode, drop_off) теряются при reuse,
+    // поэтому полагаемся только на ответ Ozon. Кэшируем результат на кандидате.
+    if (!candidate.__draft_type_resolved) {
+      const info = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
+        if (e.status === 429) throw e;
+        return null;
+      });
+      if (info) {
+        const clusters = Array.isArray(info.clusters) ? info.clusters : [];
+        const supplyTypesInDraft = clusters
+          .map((c) => String(c.supply_type || c.supplyType || "").toUpperCase())
+          .filter(Boolean);
+        const isCd = supplyTypesInDraft.some((t) => t.includes("CROSSDOCK"))
+          || String(info.supply_type || info.supplyType || "").toUpperCase().includes("CROSSDOCK");
+        candidate.__draft_type_resolved = true;
+        candidate.__draft_is_crossdock = isCd;
+        candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(info, candidate);
+        candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(info);
+        candidate.__crossdock_draft_dump = safeJsonSnippet(info, 1500);
+        if (isCd) candidate.supply_mode = "crossdock";
+      }
+    }
+
+    // CROSSDOCK обработка (определено по самому черновику или по полям кандидата)
+    if (candidate.__draft_is_crossdock || isCrossdockCandidate(candidate)) {
+      const macrolocalIds = (candidate.__crossdock_macrolocal && candidate.__crossdock_macrolocal.length)
+        ? candidate.__crossdock_macrolocal
+        : extractCrossdockMacrolocalIds(await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => { if (e.status === 429) throw e; return null; }), candidate);
       if (!macrolocalIds.length) {
         throw Object.assign(
           new Error("Не удалось определить macrolocal_cluster_id crossdock-черновика. Пересоздайте поставку."),
@@ -1439,47 +1464,48 @@ class OzonClient {
         draft_id: numericDraftId || draftId,
         date_from: dateFrom,
         date_to: dateTo,
-        supply_type: resolveSupplyType(candidate),
+        supply_type: 2,
       };
-      // Варианты для crossdock: только macrolocal_cluster_id, затем с storage если первый не вышел
       const dropOffId = toPositiveIntegerId(getDropOffPointWarehouseId(candidate));
-      const crossdockVariants = [
-        macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id })),
-        dropOffId ? macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id, storage_warehouse_id: dropOffId })) : null,
-        macrolocalIds.slice(0, 20).map((id) => ({ cluster_id: id })),
-      ].filter(Boolean);
+      const draftWhIds = candidate.__crossdock_warehouse_ids || [];
+      const variants = [];
+      variants.push(macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id })));
+      if (draftWhIds.length) {
+        variants.push(macrolocalIds.flatMap((id) => draftWhIds.slice(0, 5).map((wh) => ({ macrolocal_cluster_id: id, storage_warehouse_id: wh }))).slice(0, 20));
+      }
+      if (dropOffId) {
+        variants.push(macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id, storage_warehouse_id: dropOffId })));
+      }
       let lastError = null;
       const variantErrors = [];
-      for (const supply_type of buildSupplyTypeVariants(crossdockBase.supply_type)) {
-        for (const selected_cluster_warehouses of crossdockVariants) {
-          try {
-            const data = await this.post("/v2/draft/timeslot/info", {
-              ...crossdockBase,
-              supply_type,
-              selected_cluster_warehouses,
-            }, slotOptions);
-            if (data && typeof data === "object" && !Array.isArray(data)) {
-              data.__request_variant = { supply_type, selected_cluster_warehouses };
-            }
-            return data;
-          } catch (error) {
-            lastError = error;
-            if (error.status === 429) throw error;
-            if (isSelectedClusterWarehousesValidationError(error) || isSupplyTypeValidationError(error)) {
-              variantErrors.push(`st=${supply_type} payload=${JSON.stringify(selected_cluster_warehouses)} -> ${(error.message || "").replace(/Если ошибка.*$/s, "").slice(0, 200)}`);
-              continue;
-            }
-            throw error;
+      // supply_type=2 (CROSSDOCK) ТОЛЬКО — не пробуем DIRECT для crossdock
+      for (const selected_cluster_warehouses of variants) {
+        try {
+          const data = await this.post("/v2/draft/timeslot/info", {
+            ...crossdockBase,
+            selected_cluster_warehouses,
+          }, slotOptions);
+          if (data && typeof data === "object" && !Array.isArray(data)) {
+            data.__request_variant = { supply_type: 2, selected_cluster_warehouses };
           }
+          return data;
+        } catch (error) {
+          lastError = error;
+          if (error.status === 429) throw error;
+          if (isSelectedClusterWarehousesValidationError(error) || isSupplyTypeValidationError(error)) {
+            variantErrors.push(`${JSON.stringify(selected_cluster_warehouses).slice(0, 110)} -> ${(error.message || "").replace(/Если ошибка[\s\S]*$/, "").replace(/Request validation error: /, "").slice(0, 140)}`);
+            continue;
+          }
+          throw error;
         }
       }
       if (lastError) {
-        lastError.message = `Crossdock не нашёл слот. [variant_errors: ${variantErrors.join(" || ")}] [draft_info: ${safeJsonSnippet(draftInfo, 1000)}]`;
-        Object.assign(lastError, { __needRecreateDraft: true });
+        lastError.message = `Crossdock не нашёл слот. [variant_errors: ${variantErrors.join(" || ")}] [draft_info: ${candidate.__crossdock_draft_dump || "нет"}]`;
         throw lastError;
       }
-      throw new Error("Crossdock: Ozon не принял ни один вариант selected_cluster_warehouses");
+      throw new Error("Crossdock: Ozon не принял ни один вариант");
     }
+
     if (resolveDraftFlow(candidate) === "classic") {
       // classic flow и /v1/draft/timeslot/info отключены — идём через v2 как direct
       const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
