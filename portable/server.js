@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-full-direct-diag";
+const APP_VERSION = "2026-06-25-direct-warehouse-ids";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1607,32 +1607,46 @@ class OzonClient {
         }
       }
     }
-    // DIRECT: сначала пробуем без selected_cluster_warehouses —
-    // Ozon сам знает склады из черновика. storage_warehouse_id при DIRECT
-    // может быть запрещён ('when supply type is DIRECT, invalid storage_warehouse_id').
+    // DIRECT: v2 timeslot требует warehouse_ids (склады назначения из draft/create/info),
+    // а не selected_cluster_warehouses. При DIRECT storage_warehouse_id запрещён в
+    // selected_cluster_warehouses — Ozon отвечает 'invalid storage warehouse_id'.
+    const directWarehouseIds = (
+      (candidate.__direct_selected_warehouses || []).map((w) => w.storage_warehouse_id).filter(Boolean).length
+        ? candidate.__direct_selected_warehouses.map((w) => w.storage_warehouse_id).filter(Boolean)
+        : normalizePositiveOzonIds(candidate.warehouse_ids)
+    );
     const directBase = {
       draft_id: numericDraftId || draftId,
       date_from: dateFrom,
       date_to: dateTo,
       supply_type: 1,
     };
-    try {
-      return await this.post("/v2/draft/timeslot/info", directBase, slotOptions);
-    } catch (error) {
-      if (error.status === 429) throw error;
-      const firstErr = (error.message || "").replace(/Если ошибка.*$/s, "").slice(0, 100);
-      // Без selected_cluster_warehouses не вышло — пробуем с ними
-      const selectedWarehouses = candidate.__direct_selected_warehouses?.length
-        ? candidate.__direct_selected_warehouses
-        : await this.resolveSelectedClusterWarehouses(draftId, candidate);
+    // Пробуем разные комбинации warehouse_ids
+    const warehouseVariants = [
+      directWarehouseIds.length ? directWarehouseIds : null,
+      [],  // совсем без warehouse_ids
+    ].filter(Boolean);
+    let directLastError = null;
+    for (const wIds of warehouseVariants) {
       try {
-        return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", directBase, selectedWarehouses, slotOptions);
-      } catch (error2) {
-        if (error2.status === 429) throw error2;
-        const diag = `[no-wh: ${firstErr}] [with-wh-err: ${(error2.message || "").replace(/Если ошибка.*$/s, "").slice(0, 100)}] [selectedWh: ${JSON.stringify(selectedWarehouses.slice(0, 2))}] [directDump: ${candidate.__direct_draft_dump || "нет"}]`;
-        error2.message = `DIRECT_DIAG ${diag}`;
-        throw error2;
+        const payload = wIds.length
+          ? { ...directBase, warehouse_ids: wIds }
+          : directBase;
+        const data = await this.post("/v2/draft/timeslot/info", payload, slotOptions);
+        if (data && typeof data === "object") {
+          data.__request_variant = { supply_type: 1, warehouse_ids: wIds };
+        }
+        return data;
+      } catch (error) {
+        if (error.status === 429) throw error;
+        directLastError = error;
+        if (!isSelectedClusterWarehousesValidationError(error) && !isSupplyTypeValidationError(error)) throw error;
       }
+    }
+    if (directLastError) {
+      const diag = `[warehouse_ids: ${JSON.stringify(directWarehouseIds.slice(0, 3))}] [directDump: ${candidate.__direct_draft_dump || "нет"}]`;
+      directLastError.message = `DIRECT_DIAG ${directLastError.message} ${diag}`;
+      throw directLastError;
     }
   }
   async createSupplyFromDraft(draftId, selectedSlot, settings = {}, candidate = {}) {
@@ -1652,11 +1666,15 @@ class OzonClient {
     };
     // Если при поиске слотов v2 принял конкретный вариант — используем его же при брони
     if (candidate.timeslot_request_variant) {
-      return await this.post("/v2/draft/supply/create", {
-        ...basePayload,
-        supply_type: candidate.timeslot_request_variant.supply_type,
-        selected_cluster_warehouses: candidate.timeslot_request_variant.selected_cluster_warehouses,
-      }, {
+      const variant = candidate.timeslot_request_variant;
+      const supplyPayload = { ...basePayload, supply_type: variant.supply_type };
+      // DIRECT использует warehouse_ids, crossdock — selected_cluster_warehouses
+      if (Array.isArray(variant.warehouse_ids)) {
+        if (variant.warehouse_ids.length) supplyPayload.warehouse_ids = variant.warehouse_ids;
+      } else if (Array.isArray(variant.selected_cluster_warehouses)) {
+        supplyPayload.selected_cluster_warehouses = variant.selected_cluster_warehouses;
+      }
+      return await this.post("/v2/draft/supply/create", supplyPayload, {
         maxRetries: 0,
         minDelayMs: OZON_SLOT_REQUEST_DELAY_MS,
         base429DelayMs: 15000,
