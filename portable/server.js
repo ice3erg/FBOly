@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-direct-type-resolved-fix";
+const APP_VERSION = "2026-06-25-direct-type-diag";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1452,6 +1452,8 @@ class OzonClient {
           candidate.__direct_draft_dump = safeJsonSnippet(info, 800);
         }
         if (isCd) candidate.supply_mode = "crossdock";
+        // Диагностика: логируем что определили
+        candidate.__draft_type_diag = `isCd=${isCd} supply_type="${info.supply_type||""}" cluster_supply_types=[${supplyTypesInDraft.join(",")}] wh_ids=${JSON.stringify((candidate.__direct_warehouse_ids_from_draft||[]).slice(0,2))}`;
       } else {
         // draft_info недоступен — определяем по полям кандидата, но не по drop_off
         // (drop_off есть у всех кандидатов кластера, не только crossdock)
@@ -1653,7 +1655,7 @@ class OzonClient {
       }
     }
     if (directLastError) {
-      const diag = `[warehouse_ids: ${JSON.stringify(directWarehouseIds.slice(0, 3))}] [directDump: ${candidate.__direct_draft_dump || "нет"}]`;
+      const diag = `[warehouse_ids: ${JSON.stringify(directWarehouseIds.slice(0, 3))}] [type_diag: ${candidate.__draft_type_diag || "нет"}] [directDump: ${candidate.__direct_draft_dump || "нет"}]`;
       directLastError.message = `DIRECT_DIAG ${directLastError.message} ${diag}`;
       throw directLastError;
     }
