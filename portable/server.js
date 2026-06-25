@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-fix-crossdock-detection";
+const APP_VERSION = "2026-06-25-full-trace";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1411,6 +1411,19 @@ class OzonClient {
     };
   }
   async getDraftTimeslots(draftId, settings = {}, candidate = {}) {
+    const _trace = [];
+    const _step = (s) => _trace.push(s);
+    try {
+      return await this._getDraftTimeslotsInner(draftId, settings, candidate, _step);
+    } catch (error) {
+      if (!error.__tracePath) {
+        error.__tracePath = _trace.join("→");
+        error.message = `${error.message} [path:${error.__tracePath}]`;
+      }
+      throw error;
+    }
+  }
+  async _getDraftTimeslotsInner(draftId, settings = {}, candidate = {}, _step = () => {}) {
     const numericDraftId = toPositiveIntegerId(draftId);
     const fallbackNow = new Date();
     const fallbackDateFrom = fallbackNow.toISOString().slice(0, 10);
@@ -1428,7 +1441,9 @@ class OzonClient {
     // НАДЁЖНОЕ определение типа: грузим draft_info ОДИН раз и смотрим supply_type
     // самого черновика. Поля кандидата (supply_mode, drop_off) теряются при reuse,
     // поэтому полагаемся только на ответ Ozon. Кэшируем результат на кандидате.
+    _step("start");
     if (!candidate.__draft_type_resolved) {
+      _step("load_draft_info");
       const info = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
         if (e.status === 429) throw e;
         return null;
@@ -1462,8 +1477,10 @@ class OzonClient {
 
     // CROSSDOCK обработка — доверяем draft_info над полями кандидата
     const isDraftCrossdock = Boolean(candidate.__draft_is_crossdock);
+    _step(`isDraftCrossdock=${isDraftCrossdock}`);
 
     if (isDraftCrossdock) {
+      _step("crossdock_branch");
       const macrolocalIds = (candidate.__crossdock_macrolocal && candidate.__crossdock_macrolocal.length)
         ? candidate.__crossdock_macrolocal
         : extractCrossdockMacrolocalIds(await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => { if (e.status === 429) throw e; return null; }), candidate);
@@ -1520,6 +1537,7 @@ class OzonClient {
     }
 
     if (resolveDraftFlow(candidate) === "classic") {
+      _step("classic_branch");
       // classic flow и /v1/draft/timeslot/info отключены — идём через v2 как direct
       const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
       return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", {
@@ -1532,6 +1550,7 @@ class OzonClient {
     // Direct: только v2. Но сначала надёжно проверим — вдруг это crossdock-черновик.
     // Сигналы: supply_mode кандидата, drop_off_point, supply_type в самом черновике.
     if (candidate.__crossdock_check_done !== true) {
+      _step("old_crossdock_check");
       const directDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
         if (e.status === 429) throw e;
         return null;
@@ -1553,6 +1572,7 @@ class OzonClient {
       }
     }
     if (candidate.__crossdock_check_done === true) {
+      _step("old_crossdock_true_branch");
       // Если macrolocal ещё не добыт (быстрый сигнал сработал) — добираем из черновика
       if (!candidate.__crossdock_macrolocal || !candidate.__crossdock_macrolocal.length) {
         const cdDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
@@ -1614,9 +1634,8 @@ class OzonClient {
         }
       }
     }
-    // DIRECT: v2 timeslot требует warehouse_ids (склады назначения из draft/create/info),
-    // а не selected_cluster_warehouses. При DIRECT storage_warehouse_id запрещён в
-    // selected_cluster_warehouses — Ozon отвечает 'invalid storage warehouse_id'.
+    // DIRECT: v2 timeslot требует warehouse_ids
+    _step("direct_branch");
     const directWarehouseIds = (
       (candidate.__direct_warehouse_ids_from_draft || []).length
         ? candidate.__direct_warehouse_ids_from_draft
