@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-macrolocal-only-first-variant";
+const APP_VERSION = "2026-06-25-direct-from-draft-no-crossdock-fast";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1524,30 +1524,23 @@ class OzonClient {
     // Direct: только v2. Но сначала надёжно проверим — вдруг это crossdock-черновик.
     // Сигналы: supply_mode кандидата, drop_off_point, supply_type в самом черновике.
     if (candidate.__crossdock_check_done !== true) {
-      // Быстрые сигналы без запроса к Ozon
-      const hasDropOff = Boolean(toPositiveIntegerId(getDropOffPointWarehouseId(candidate)));
-      const modeIsCrossdock = isCrossdockCandidate(candidate);
-      if (modeIsCrossdock || hasDropOff) {
-        candidate.__crossdock_check_done = true;
-        candidate.supply_mode = "crossdock";
-      } else {
-        // Точная проверка через черновик
-        const directDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
-          if (e.status === 429) throw e;
-          return null;
-        });
-        // Если запрос НЕ удался (null) — не кэшируем, попробуем в следующий раз
-        if (directDraftInfo) {
-          const directClusters = Array.isArray(directDraftInfo.clusters) ? directDraftInfo.clusters : [];
-          const isCd = directClusters.some((c) => String(c.supply_type || c.supplyType || "").toUpperCase().includes("CROSSDOCK"))
-            || String(directDraftInfo.supply_type || directDraftInfo.supplyType || "").toUpperCase().includes("CROSSDOCK");
-          candidate.__crossdock_check_done = isCd;
-          if (isCd) {
-            candidate.supply_mode = "crossdock";
-            candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(directDraftInfo, candidate);
-            candidate.__crossdock_draft_dump = safeJsonSnippet(directDraftInfo, 1800);
-            candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(directDraftInfo);
-          }
+      const directDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
+        if (e.status === 429) throw e;
+        return null;
+      });
+      if (directDraftInfo) {
+        const directClusters = Array.isArray(directDraftInfo.clusters) ? directDraftInfo.clusters : [];
+        const isCd = directClusters.some((c) => String(c.supply_type || c.supplyType || "").toUpperCase().includes("CROSSDOCK"))
+          || String(directDraftInfo.supply_type || directDraftInfo.supplyType || "").toUpperCase().includes("CROSSDOCK");
+        candidate.__crossdock_check_done = isCd;
+        if (isCd) {
+          candidate.supply_mode = "crossdock";
+          candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(directDraftInfo, candidate);
+          candidate.__crossdock_draft_dump = safeJsonSnippet(directDraftInfo, 1800);
+          candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(directDraftInfo);
+        } else {
+          // DIRECT — кэшируем warehouses прямо сейчас
+          candidate.__direct_selected_warehouses = extractSelectedClusterWarehousesFromDraftInfo(directDraftInfo, candidate.cluster_ids);
         }
       }
     }
@@ -1613,12 +1606,14 @@ class OzonClient {
         }
       }
     }
-    const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
+    const selectedWarehouses = candidate.__direct_selected_warehouses?.length
+      ? candidate.__direct_selected_warehouses
+      : await this.resolveSelectedClusterWarehouses(draftId, candidate);
     const basePayload = {
       draft_id: numericDraftId || draftId,
       date_from: dateFrom,
       date_to: dateTo,
-      supply_type: resolveSupplyType(candidate),
+      supply_type: 1, // DIRECT
     };
     return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", basePayload, selectedWarehouses, slotOptions);
   }
