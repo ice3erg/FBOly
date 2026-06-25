@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-trust-draft-type";
+const APP_VERSION = "2026-06-25-macrolocal-only-first-variant";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -2439,25 +2439,35 @@ function buildSelectedClusterWarehousePayloadVariants(selectedWarehouses) {
   const normalized = normalizeSelectedClusterWarehouses(selectedWarehouses);
   if (!normalized.length) return [];
   const first = normalized.slice(0, 1);
-  // v2 /draft/timeslot/info требует macrolocal_cluster_id > 0 в каждом элементе.
-  // Если cluster_id есть — отправляем варианты с ним (приоритет macrolocal_cluster_id).
   const hasClusterId = first.every((item) => item.cluster_id);
-  const withMacrolocalClusterId = first.map((item) => ({
+
+  // Вариант 1: только macrolocal_cluster_id, без storage_warehouse_id
+  // Для direct Ozon не требует конкретный склад в selected_cluster_warehouses
+  const macrolocalOnly = hasClusterId
+    ? first.map((item) => ({ macrolocal_cluster_id: item.cluster_id }))
+    : null;
+
+  // Вариант 2: macrolocal_cluster_id + storage_warehouse_id
+  const withMacrolocalAndStorage = first.map((item) => ({
     ...(item.cluster_id ? { macrolocal_cluster_id: item.cluster_id } : {}),
     storage_warehouse_id: item.storage_warehouse_id,
   }));
-  const withClusterId = first.map((item) => ({
+
+  // Вариант 3: cluster_id + storage_warehouse_id (устаревший формат)
+  const withClusterIdAndStorage = first.map((item) => ({
     ...(item.cluster_id ? { cluster_id: item.cluster_id } : {}),
     storage_warehouse_id: item.storage_warehouse_id,
   }));
+
+  // Вариант 4: только storage (если нет cluster_id)
   const storageOnly = first.map((item) => ({
     storage_warehouse_id: item.storage_warehouse_id,
   }));
-  // Если cluster_id есть — НЕ отправляем storageOnly (Ozon отклонит без macrolocal_cluster_id).
-  // Если cluster_id нет — отправляем только storageOnly (хоть какой-то шанс).
+
   const variants = hasClusterId
-    ? [withMacrolocalClusterId, withClusterId]
+    ? [macrolocalOnly, withMacrolocalAndStorage, withClusterIdAndStorage].filter(Boolean)
     : [storageOnly];
+
   const seen = new Set();
   return variants.filter((variant) => {
     const key = JSON.stringify(variant);
