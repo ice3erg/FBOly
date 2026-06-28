@@ -2252,7 +2252,10 @@ function DraftCreationPanel({
         const data = await res.json();
         if (data.candidates?.length) {
           const byWarehouse = new Map(data.candidates.map((c: DraftCandidate) => [c.warehouse, c]));
-          setLocalCandidates((prev) => prev.map((c) => byWarehouse.has(c.warehouse) ? { ...c, ...byWarehouse.get(c.warehouse) } : c));
+          setLocalCandidates((prev) => prev.map((c) => {
+              const updated = byWarehouse.get(c.warehouse);
+              return updated ? { ...c, ...updated } : c;
+            }));
         }
       } catch { /* тихо */ }
       finally { setIsRedistributing(false); }
