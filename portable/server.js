@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-28-no-missing-clusters-smart-min";
+const APP_VERSION = "2026-06-28-cluster-count-toggle-redistribute";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -585,6 +585,74 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { ok: results.every((item) => item.ok), results });
     }
+    // Перераспределение при снятии кластера — пересчитывает количества без excluded
+    if (req.method === "POST" && requestUrl.pathname === "/api/ozon/redistribute") {
+      const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+      const { candidates, excluded_warehouses } = body;
+      if (!Array.isArray(candidates)) return json(res, 400, { detail: "candidates required" });
+      const excludedSet = new Set((excluded_warehouses || []).map(String));
+      const activeCandidates = candidates.filter((c) => !excludedSet.has(c.warehouse));
+      if (!activeCandidates.length) return json(res, 200, { candidates: [] });
+
+      // Собираем все товары со всех кандидатов с их суммарными количествами
+      const itemTotals = new Map();
+      for (const candidate of candidates) {
+        for (const item of (candidate.items || [])) {
+          const key = item.sku || item.offer_id;
+          if (!key) continue;
+          if (!itemTotals.has(key)) itemTotals.set(key, { ...item, quantity: 0 });
+          itemTotals.get(key).quantity += Number(item.quantity || 0);
+        }
+      }
+      const allItems = [...itemTotals.values()];
+      const totalQty = allItems.reduce((s, i) => s + i.quantity, 0);
+
+      // Распределяем по весам: чем больше уже было у кластера — тем больше получает
+      const activeWeights = Object.fromEntries(
+        activeCandidates.map((c) => [c.warehouse, c.total_quantity || 1])
+      );
+      const weightSum = Object.values(activeWeights).reduce((s, w) => s + w, 0);
+      if (!weightSum) return json(res, 200, { candidates });
+
+      // Перераспределяем каждый товар по весам
+      const newItemsByWarehouse = new Map(activeCandidates.map((c) => [c.warehouse, new Map()]));
+      for (const item of allItems) {
+        let remaining = item.quantity;
+        const sorted = activeCandidates.slice().sort((a, b) =>
+          (activeWeights[b.warehouse] || 0) - (activeWeights[a.warehouse] || 0)
+        );
+        for (let i = 0; i < sorted.length; i++) {
+          const candidate = sorted[i];
+          const weight = activeWeights[candidate.warehouse] || 0;
+          const share = i < sorted.length - 1
+            ? Math.round((weight / weightSum) * item.quantity)
+            : remaining; // последний получает остаток
+          const qty = Math.max(0, Math.min(share, remaining));
+          if (qty > 0) {
+            const whMap = newItemsByWarehouse.get(candidate.warehouse);
+            const key = item.sku || item.offer_id;
+            whMap.set(key, { ...item, quantity: (whMap.get(key)?.quantity || 0) + qty });
+          }
+          remaining -= qty;
+          if (remaining <= 0) break;
+        }
+      }
+
+      // Обновляем candidates
+      const result = activeCandidates.map((candidate) => {
+        const whMap = newItemsByWarehouse.get(candidate.warehouse) || new Map();
+        const items = [...whMap.values()].filter((i) => i.quantity > 0);
+        return {
+          ...candidate,
+          items,
+          total_quantity: items.reduce((s, i) => s + i.quantity, 0),
+          rows_count: items.length,
+        };
+      }).filter((c) => c.total_quantity > 0);
+
+      return json(res, 200, { candidates: result, total: totalQty });
+    }
+
     // Просмотр доступных слотов для конкретного черновика (для ручного выбора)
     if (req.method === "POST" && requestUrl.pathname === "/api/ozon/browse-timeslots") {
       const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
@@ -711,6 +779,8 @@ const server = http.createServer(async (req, res) => {
       const distributionPlan = client
         ? await buildSmartDistributionPlan(client, resolved, normalizedManualWarehouses, {
             includeInternational: form.fields.ozon_include_international === "true",
+            includeRemote: form.fields.ozon_include_remote === "true",
+            maxClusters: Number(form.fields.ozon_max_clusters) || 0,
           })
         : createManualDistributionPlan(normalizedManualWarehouses, "Нет API-ключей, используется ручное распределение");
       const files = createWarehouseFiles(resolved, distributionPlan.warehouses, distributionPlan);
@@ -2858,6 +2928,8 @@ function uniqueWarehouses(warehouses) {
 
 async function buildSmartDistributionPlan(client, items, manualWarehouses, options = {}) {
   const includeInternational = Boolean(options.includeInternational);
+  const includeRemote = Boolean(options.includeRemote); // Дальний Восток
+  const maxClusters = Number(options.maxClusters) || 0; // 0 = без лимита
   const skus = [...new Set(items.map((item) => item.sku).filter(Boolean).map(String))];
   if (!skus.length) {
     return createManualDistributionPlan(
@@ -2895,9 +2967,9 @@ async function buildSmartDistributionPlan(client, items, manualWarehouses, optio
     manualWarehouses,
   });
   // Фильтр зарубежных кластеров: по умолчанию исключаем (не все везут за рубеж)
-  const filteredWarehouses = includeInternational
-    ? autoWarehouses
-    : autoWarehouses.filter((w) => !isInternationalCluster(w.name));
+  const filteredWarehouses = autoWarehouses
+    .filter((w) => includeInternational || !isInternationalCluster(w.name))
+    .filter((w) => includeRemote || !isRemoteCluster(w.name));
   // Фильтруем кластеры без cluster_id — их нельзя создать как черновик Ozon.
   // Если у кластера нет ни classic_cluster_ids ни cluster_ids — значит Ozon не
   // открыл этот кластер для данного магазина (или он не существует в API).
@@ -2919,6 +2991,7 @@ async function buildSmartDistributionPlan(client, items, manualWarehouses, optio
     targetWarehouses,
     distributionIndexes,
     MIN_OUTPUT_CLUSTER_QUANTITY,
+    maxClusters,
   );
 
   const hasOzonWarehouseSource = ozonWarehouses.length > 0 || stockRows.length > 0 || regionalSalesBySku.size > 0;
@@ -2975,7 +3048,12 @@ function createManualDistributionPlan(warehouses, note) {
   };
 }
 
-function selectOutputClustersByMinimumQuantity(items, warehouses, indexes, _minQuantity) {
+function isRemoteCluster(name) {
+  // Дальний Восток — отдельная категория (дорого везти, долго)
+  return /дальн.*вост|дв\b/i.test(String(name || ""));
+}
+
+function selectOutputClustersByMinimumQuantity(items, warehouses, indexes, _minQuantity, maxClusters = 0) {
   if (!warehouses.length) return warehouses;
   if (warehouses.length === 1) return warehouses;
 
@@ -2991,28 +3069,28 @@ function selectOutputClustersByMinimumQuantity(items, warehouses, indexes, _minQ
     }
   }
 
-  // Умный минимум на кластер:
-  // - Берём настроенный минимум (по умолчанию 10 шт) как базу
-  // - При очень малых партиях можем снизить до половины минимума
-  //   (чтобы не остаться с 1-2 кластерами при 30 шт)
-  // - При больших партиях минимум может расти пропорционально
-  //   (нет смысла везти 10 шт если суммарно 2000 шт)
+  // Умный минимум: адаптируется к объёму партии
   const configuredMin = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 10);
   const minPerCluster = totalQuantity <= configuredMin * 3
-    ? Math.max(1, Math.floor(configuredMin / 2))   // очень мало — половина минимума
+    ? Math.max(1, Math.floor(configuredMin / 2))
     : totalQuantity <= configuredMin * 15
-      ? configuredMin                                // норма — настроенный минимум
-      : Math.max(configuredMin, Math.round(totalQuantity / 30)); // много — пропорционально
+      ? configuredMin
+      : Math.max(configuredMin, Math.round(totalQuantity / 30));
 
-  const passing = warehouses.filter((w) => (totals.get(w.name) || 0) >= minPerCluster);
+  // Отбираем кластеры выше минимума, сортируем по количеству (лучшие первые)
+  const passing = warehouses
+    .filter((w) => (totals.get(w.name) || 0) >= minPerCluster)
+    .sort((a, b) => (totals.get(b.name) || 0) - (totals.get(a.name) || 0));
 
   if (!passing.length) {
-    // Ничего не проходит порог — берём топ-кластер
-    const sorted = [...warehouses].sort((a, b) => (totals.get(b.name) || 0) - (totals.get(a.name) || 0));
-    return sorted.slice(0, 1);
+    return warehouses
+      .sort((a, b) => (totals.get(b.name) || 0) - (totals.get(a.name) || 0))
+      .slice(0, 1);
   }
 
-  return passing;
+  // Применяем лимит числа кластеров если задан
+  const capped = maxClusters > 0 ? passing.slice(0, maxClusters) : passing;
+  return capped;
 }
 
 function buildSmartWeights(item, warehouses, indexes) {

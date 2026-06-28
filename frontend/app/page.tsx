@@ -363,6 +363,8 @@ export default function Home() {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [includeInternational, setIncludeInternational] = useState(false);
+  const [includeRemote, setIncludeRemote] = useState(false);
+  const [maxClusters, setMaxClusters] = useState<number>(10); // дефолт 10 кластеров
   const [warehouses, setWarehouses] =
     useState<WarehousePercentage[]>(DEFAULT_WAREHOUSES);
   const [result, setResult] = useState<ProcessResponse | null>(null);
@@ -828,6 +830,8 @@ export default function Home() {
       formData.append("ozon_api_key", apiKey.trim());
     }
     formData.append("ozon_include_international", includeInternational ? "true" : "false");
+    formData.append("ozon_include_remote", includeRemote ? "true" : "false");
+    formData.append("ozon_max_clusters", String(maxClusters || 0));
 
     try {
       const response = await fetch(`${API_URL}/api/process`, {
@@ -1305,6 +1309,10 @@ export default function Home() {
               apiKey={apiKey}
               includeInternational={includeInternational}
               onToggleInternational={setIncludeInternational}
+              includeRemote={includeRemote}
+              onToggleRemote={setIncludeRemote}
+              maxClusters={maxClusters}
+              onSetMaxClusters={setMaxClusters}
             />
           )}
           {activeView === "slotHunter" && (
@@ -1479,6 +1487,10 @@ function SupplyView({
   apiKey,
   includeInternational,
   onToggleInternational,
+  includeRemote,
+  onToggleRemote,
+  maxClusters,
+  onSetMaxClusters,
 }: {
   stores: OzonStore[];
   activeStore: OzonStore | null;
@@ -1500,6 +1512,10 @@ function SupplyView({
   apiKey: string;
   includeInternational: boolean;
   onToggleInternational: (v: boolean) => void;
+  includeRemote: boolean;
+  onToggleRemote: (v: boolean) => void;
+  maxClusters: number;
+  onSetMaxClusters: (v: number) => void;
   onSelectStore: (storeId: string) => void;
   onOpenProfile: () => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -1623,17 +1639,43 @@ function SupplyView({
             />
           </label>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-3">
+              <div className="text-sm font-medium text-muted-foreground">Настройки распределения</div>
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground">Количество кластеров</div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { label: "8", value: 8 },
+                    { label: "10", value: 10 },
+                    { label: "14", value: 14 },
+                    { label: "Все", value: 0 },
+                  ].map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => onSetMaxClusters(opt.value)}
+                      className={cn(
+                        "rounded-md border px-3 py-1 text-sm transition",
+                        maxClusters === opt.value
+                          ? "border-primary/60 bg-primary/15 text-foreground"
+                          : "border-white/15 text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="flex flex-col gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={downloadInputTemplate}
-                  className="w-fit gap-2 text-primary"
-                >
-                  <Download className="h-4 w-4" />
-                  Скачать шаблон Excel
-                </Button>
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={includeRemote}
+                    onChange={(e) => onToggleRemote(e.target.checked)}
+                    className="h-4 w-4 rounded border-white/20 accent-primary"
+                  />
+                  Включая Дальний Восток
+                </label>
                 <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
                   <input
                     type="checkbox"
@@ -1644,6 +1686,18 @@ function SupplyView({
                   Включая другие страны (Казахстан, Беларусь, Армения)
                 </label>
               </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={downloadInputTemplate}
+                className="w-fit gap-2 text-primary"
+              >
+                <Download className="h-4 w-4" />
+                Скачать шаблон Excel
+              </Button>
             <Button
               type="submit"
               disabled={!selectedFile || !hasFullCredentials || isLoading}
@@ -2157,6 +2211,54 @@ function DraftCreationPanel({
   apiKey: string;
 }) {
   const [selectedWarehouses, setSelectedWarehouses] = useState<string[]>([]);
+  const [localCandidates, setLocalCandidates] = useState<DraftCandidate[]>(candidates);
+  const [isRedistributing, setIsRedistributing] = useState(false);
+
+  // Синхронизируем localCandidates когда приходят новые candidates с сервера
+  useEffect(() => {
+    setLocalCandidates(candidates);
+  }, [candidates]);
+
+  const createableCandidates = useMemo(
+    () => localCandidates.filter((c) => c.can_create !== false),
+    [localCandidates],
+  );
+
+  // При первой загрузке кандидатов — выбираем все
+  useEffect(() => {
+    if (selectedWarehouses.length === 0 && createableCandidates.length > 0) {
+      setSelectedWarehouses(createableCandidates.map((c) => c.warehouse));
+    }
+  }, [createableCandidates]);
+
+  const toggleWarehouseWithRedistribute = useCallback(async (warehouse: string) => {
+    const isRemoving = selectedWarehouses.includes(warehouse);
+    const nextSelected = isRemoving
+      ? selectedWarehouses.filter((w) => w !== warehouse)
+      : [...selectedWarehouses, warehouse];
+    setSelectedWarehouses(nextSelected);
+
+    if (isRemoving && nextSelected.length > 0) {
+      setIsRedistributing(true);
+      try {
+        const excluded = createableCandidates
+          .map((c) => c.warehouse)
+          .filter((w) => !nextSelected.includes(w));
+        const res = await fetch("/api/ozon/redistribute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ candidates: createableCandidates, excluded_warehouses: excluded }),
+        });
+        const data = await res.json();
+        if (data.candidates?.length) {
+          const byWarehouse = new Map(data.candidates.map((c: DraftCandidate) => [c.warehouse, c]));
+          setLocalCandidates((prev) => prev.map((c) => byWarehouse.has(c.warehouse) ? { ...c, ...byWarehouse.get(c.warehouse) } : c));
+        }
+      } catch { /* тихо */ }
+      finally { setIsRedistributing(false); }
+    }
+  }, [selectedWarehouses, createableCandidates]);
+
   const [supplyMode, setSupplyMode] = useState<"direct" | "crossdock">("direct");
   const [dropOffPointWarehouseId, setDropOffPointWarehouseId] = useState("");
   const [dropOffPointWarehouseType, setDropOffPointWarehouseType] = useState("");
@@ -2220,15 +2322,6 @@ function DraftCreationPanel({
     }
   }, [clientId, apiKey]);
 
-  const createableCandidates = useMemo(
-    () => candidates.filter((candidate) => candidate.can_create !== false),
-    [candidates],
-  );
-
-  useEffect(() => {
-    setSelectedWarehouses(createableCandidates.map((candidate) => candidate.warehouse));
-  }, [createableCandidates]);
-
   const selectedCandidates = createableCandidates.filter((candidate) =>
     selectedWarehouses.includes(candidate.warehouse),
   );
@@ -2239,6 +2332,7 @@ function DraftCreationPanel({
   const canCreateDrafts =
     Boolean(selectedCandidates.length) &&
     !isCreating &&
+    !isRedistributing &&
     (supplyMode === "direct" || Boolean(dropOffPointWarehouseId.trim()));
 
   const candidatesForCreate = selectedCandidates.map((candidate) => ({
@@ -2250,14 +2344,6 @@ function DraftCreationPanel({
     drop_off_point_warehouse_type:
       supplyMode === "crossdock" ? dropOffPointWarehouseType.trim() : null,
   }));
-
-  function toggleWarehouse(warehouse: string) {
-    setSelectedWarehouses((current) =>
-      current.includes(warehouse)
-        ? current.filter((item) => item !== warehouse)
-        : [...current, warehouse],
-    );
-  }
 
   function selectAllWarehouses() {
     setSelectedWarehouses(createableCandidates.map((candidate) => candidate.warehouse));
@@ -2488,14 +2574,20 @@ function DraftCreationPanel({
                     <input
                       type="checkbox"
                       checked={checked}
-                      disabled={disabled || isCreating}
-                      onChange={() => toggleWarehouse(draft.warehouse)}
+                      disabled={disabled || isCreating || isRedistributing}
+                      onChange={() => toggleWarehouseWithRedistribute(draft.warehouse)}
                       className="mt-1 h-4 w-4 rounded border-input"
                     />
                     <div className="min-w-0">
                       <div className="truncate font-medium">{draft.warehouse}</div>
                       <div className="mt-1 text-sm text-muted-foreground">
-                        {draft.rows_count} SKU, {draft.total_quantity} шт.
+                        {draft.rows_count} SKU, {isRedistributing ? (
+                          <span className="inline-flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" /> пересчёт...
+                          </span>
+                        ) : (
+                          <span>{draft.total_quantity} шт.</span>
+                        )}
                       </div>
                       {draft.draft_id && (
                         <div className="mt-1 text-xs text-muted-foreground">
