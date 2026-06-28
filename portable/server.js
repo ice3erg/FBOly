@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-remove-old-crossdock-block";
+const APP_VERSION = "2026-06-25-crossdock-from-cluster-type";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1442,6 +1442,12 @@ class OzonClient {
     // самого черновика. Поля кандидата (supply_mode, drop_off) теряются при reuse,
     // поэтому полагаемся только на ответ Ozon. Кэшируем результат на кандидате.
     _step("start");
+    // Сбрасываем кэш если сменился draft_id (пересоздание черновика)
+    if (candidate.__draft_type_resolved && candidate.__draft_type_for_id !== String(draftId)) {
+      candidate.__draft_type_resolved = false;
+      delete candidate.__crossdock_check_done;
+    }
+
     if (!candidate.__draft_type_resolved) {
       _step("load_draft_info");
       const info = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
@@ -1450,27 +1456,32 @@ class OzonClient {
       });
       // Ставим флаг всегда, даже при null — иначе каждая попытка бьёт draft/create/info
       candidate.__draft_type_resolved = true;
-      // Сбрасываем старый кэш __crossdock_check_done — он мог быть установлен
-      // предыдущими версиями кода и конфликтовать с новой логикой
+      candidate.__draft_type_for_id = String(draftId);
       delete candidate.__crossdock_check_done;
       if (info) {
         const clusters = Array.isArray(info.clusters) ? info.clusters : [];
-        // Тип черновика — только из верхнего уровня draft_info, НЕ из clusters.supply_type
-        // (clusters.supply_type показывает доступные типы кластера, не тип черновика)
-        const draftSupplyType = String(info.supply_type || info.supplyType || info.create_type || info.createType || "").toUpperCase();
-        const isCd = draftSupplyType.includes("CROSSDOCK") || draftSupplyType === "2";
+        // Тип черновика: сначала верхний уровень, затем clusters[].supply_type
+        // (для некоторых черновиков верхний уровень пуст, тип только в кластере)
+        const topLevelType = String(info.supply_type || info.supplyType || info.create_type || info.createType || "").toUpperCase();
+        const clusterType = clusters.map((c) => String(c.supply_type || c.supplyType || "").toUpperCase()).find(Boolean) || "";
+        const effectiveType = topLevelType || clusterType;
+        const isCd = effectiveType.includes("CROSSDOCK") || effectiveType === "2";
         candidate.__draft_is_crossdock = isCd;
-        candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(info, candidate);
+        // Macrolocal ids берём из кластеров напрямую
+        candidate.__crossdock_macrolocal = clusters
+          .map((c) => toPositiveIntegerId(c.macrolocal_cluster_id))
+          .filter((id) => id && id >= 1000);
+        if (!candidate.__crossdock_macrolocal.length) {
+          candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(info, candidate);
+        }
         candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(info);
         candidate.__crossdock_draft_dump = safeJsonSnippet(info, 1500);
-        // Для DIRECT — кэшируем warehouses из draft_info
         if (!isCd) {
           candidate.__direct_warehouse_ids_from_draft = extractAvailableWarehouseIdsFromDraftInfo(info).map(Number).filter(Boolean);
           candidate.__direct_draft_dump = safeJsonSnippet(info, 800);
         }
         if (isCd) candidate.supply_mode = "crossdock";
-        // Диагностика: логируем что определили
-        candidate.__draft_type_diag = `isCd=${isCd} draftSupplyType="${draftSupplyType}" wh_ids=${JSON.stringify((candidate.__direct_warehouse_ids_from_draft||[]).slice(0,2))}`;
+        candidate.__draft_type_diag = `isCd=${isCd} top="${topLevelType}" cluster="${clusterType}" macrolocal=${JSON.stringify(candidate.__crossdock_macrolocal)}`;
       } else {
         // draft_info недоступен — определяем по полям кандидата, но не по drop_off
         // (drop_off есть у всех кандидатов кластера, не только crossdock)
