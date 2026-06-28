@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-crossdock-by-null-storage";
+const APP_VERSION = "2026-06-28-supply-type-string-from-docs";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1481,7 +1481,15 @@ class OzonClient {
         candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(info);
         candidate.__crossdock_draft_dump = safeJsonSnippet(info, 1500);
         if (!isCd) {
-          candidate.__direct_warehouse_ids_from_draft = extractAvailableWarehouseIdsFromDraftInfo(info).map(Number).filter(Boolean);
+          // Для DIRECT берём storage_warehouse_id из clusters[].warehouses[].storage_warehouse
+          const storageIds = clusters.flatMap((c) =>
+            (Array.isArray(c.warehouses) ? c.warehouses : [])
+              .map((w) => w.storage_warehouse && (w.storage_warehouse.id || w.storage_warehouse.warehouse_id || w.storage_warehouse.storage_warehouse_id))
+              .filter(Boolean)
+              .map(Number)
+              .filter(Boolean)
+          );
+          candidate.__direct_warehouse_ids_from_draft = storageIds;
           candidate.__direct_draft_dump = safeJsonSnippet(info, 800);
         }
         if (isCd) candidate.supply_mode = "crossdock";
@@ -1508,25 +1516,29 @@ class OzonClient {
           { __needRecreateDraft: true },
         );
       }
+      // Документация: supply_type — строка "CROSSDOCK"/"DIRECT"/"MULTI_CLUSTER", не число
       const crossdockBase = {
         draft_id: numericDraftId || draftId,
         date_from: dateFrom,
         date_to: dateTo,
-        supply_type: 2,
+        supply_type: "CROSSDOCK",
       };
       const dropOffId = toPositiveIntegerId(getDropOffPointWarehouseId(candidate));
       const draftWhIds = candidate.__crossdock_warehouse_ids || [];
+      // selected_cluster_warehouses обязателен (1-20 items). Для crossdock storage_warehouse_id опционален.
       const variants = [];
+      // 1. Только macrolocal_cluster_id (crossdock: склад null, назначается после сортировки)
       variants.push(macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id })));
+      // 2. macrolocal + склады из черновика (если есть)
       if (draftWhIds.length) {
         variants.push(macrolocalIds.flatMap((id) => draftWhIds.slice(0, 5).map((wh) => ({ macrolocal_cluster_id: id, storage_warehouse_id: wh }))).slice(0, 20));
       }
+      // 3. macrolocal + drop-off как storage
       if (dropOffId) {
         variants.push(macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id, storage_warehouse_id: dropOffId })));
       }
       let lastError = null;
       const variantErrors = [];
-      // supply_type=2 (CROSSDOCK) ТОЛЬКО — не пробуем DIRECT для crossdock
       for (const selected_cluster_warehouses of variants) {
         try {
           const data = await this.post("/v2/draft/timeslot/info", {
@@ -1534,7 +1546,7 @@ class OzonClient {
             selected_cluster_warehouses,
           }, slotOptions);
           if (data && typeof data === "object" && !Array.isArray(data)) {
-            data.__request_variant = { supply_type: 2, selected_cluster_warehouses };
+            data.__request_variant = { supply_type: "CROSSDOCK", selected_cluster_warehouses };
           }
           return data;
         } catch (error) {
@@ -1554,45 +1566,60 @@ class OzonClient {
       throw new Error("Crossdock: Ozon не принял ни один вариант");
     }
 
-    // DIRECT: v2 timeslot требует warehouse_ids
+    // DIRECT: по документации Ozon v2/draft/timeslot/info
+    // supply_type: "DIRECT" (строка), selected_cluster_warehouses обязателен
+    // storage_warehouse_id берётся из clusters[].warehouses[].storage_warehouse в draft/create/info
     _step("direct_branch");
-    const directWarehouseIds = (
-      (candidate.__direct_warehouse_ids_from_draft || []).length
-        ? candidate.__direct_warehouse_ids_from_draft
-        : (candidate.__direct_selected_warehouses || []).map((w) => w.storage_warehouse_id).filter(Boolean).length
-          ? candidate.__direct_selected_warehouses.map((w) => w.storage_warehouse_id).filter(Boolean)
-          : normalizePositiveOzonIds(candidate.warehouse_ids)
-    );
+    const directStorageIds = (candidate.__direct_warehouse_ids_from_draft || [])
+      .filter(Boolean)
+      .map(Number)
+      .filter(Boolean);
+    const macrolocalForDirect = (candidate.__crossdock_macrolocal || [])
+      .filter((id) => id >= 1000);
     const directBase = {
       draft_id: numericDraftId || draftId,
       date_from: dateFrom,
       date_to: dateTo,
-      supply_type: 1,
+      supply_type: "DIRECT",
     };
-    // Пробуем разные комбинации warehouse_ids
-    const warehouseVariants = [
-      directWarehouseIds.length ? directWarehouseIds : null,
-      [],  // совсем без warehouse_ids
-    ].filter(Boolean);
+    // Варианты selected_cluster_warehouses для DIRECT
+    const directVariants = [];
+    if (macrolocalForDirect.length && directStorageIds.length) {
+      // Полный вариант: macrolocal + storage_warehouse_id
+      directVariants.push(macrolocalForDirect.slice(0, 20).map((id) => ({
+        macrolocal_cluster_id: id,
+        storage_warehouse_id: directStorageIds[0],
+      })));
+    }
+    if (macrolocalForDirect.length) {
+      // Только macrolocal без storage (попробуем на случай если storage не нужен)
+      directVariants.push(macrolocalForDirect.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id })));
+    }
+    if (directStorageIds.length) {
+      // Только storage без macrolocal
+      directVariants.push(directStorageIds.slice(0, 20).map((id) => ({ storage_warehouse_id: id })));
+    }
     let directLastError = null;
-    for (const wIds of warehouseVariants) {
+    const directVariantErrors = [];
+    for (const selected_cluster_warehouses of directVariants) {
       try {
-        const payload = wIds.length
-          ? { ...directBase, warehouse_ids: wIds }
-          : directBase;
-        const data = await this.post("/v2/draft/timeslot/info", payload, slotOptions);
+        const data = await this.post("/v2/draft/timeslot/info", {
+          ...directBase,
+          selected_cluster_warehouses,
+        }, slotOptions);
         if (data && typeof data === "object") {
-          data.__request_variant = { supply_type: 1, warehouse_ids: wIds };
+          data.__request_variant = { supply_type: "DIRECT", selected_cluster_warehouses };
         }
         return data;
       } catch (error) {
         if (error.status === 429) throw error;
         directLastError = error;
-        if (!isSelectedClusterWarehousesValidationError(error) && !isSupplyTypeValidationError(error)) throw error;
+        directVariantErrors.push(`${JSON.stringify(selected_cluster_warehouses).slice(0, 80)} -> ${(error.message || "").replace(/Если ошибка[\s\S]*$/, "").slice(0, 100)}`);
+        if (!isSelectedClusterWarehousesValidationError(error) && !isSupplyTypeValidationError(error)) break;
       }
     }
     if (directLastError) {
-      const diag = `[warehouse_ids: ${JSON.stringify(directWarehouseIds.slice(0, 3))}] [type_diag: ${candidate.__draft_type_diag || "нет"}] [directDump: ${candidate.__direct_draft_dump || "нет"}]`;
+      const diag = `[type_diag: ${candidate.__draft_type_diag || "нет"}] [variants: ${directVariantErrors.join(" || ")}] [directDump: ${candidate.__direct_draft_dump || "нет"}]`;
       directLastError.message = `DIRECT_DIAG ${directLastError.message} ${diag}`;
       throw directLastError;
     }
@@ -2457,14 +2484,13 @@ function buildSelectedClusterWarehousePayloadVariants(selectedWarehouses) {
 }
 
 function resolveSupplyType(candidate = {}) {
-  const raw = candidate.supply_type
-    || candidate.supplyType
-    || (candidate.cluster_info && candidate.cluster_info.supply_type)
-    || (candidate.clusterInfo && candidate.clusterInfo.supplyType);
-  const parsed = toPositiveIntegerId(raw);
-  if (parsed) return parsed;
-  // Если supply_type потерян, но это crossdock — дефолт 2 (CROSSDOCK), иначе 1 (DIRECT)
-  return isCrossdockCandidate(candidate) ? 2 : 1;
+  // Документация Ozon: supply_type — строка "CROSSDOCK" / "DIRECT" / "MULTI_CLUSTER"
+  const raw = String(candidate.supply_type || candidate.supplyType || "").toUpperCase();
+  if (raw === "CROSSDOCK" || raw === "2") return "CROSSDOCK";
+  if (raw === "MULTI_CLUSTER" || raw === "3") return "MULTI_CLUSTER";
+  if (raw === "DIRECT" || raw === "1") return "DIRECT";
+  // Дефолт по типу кандидата
+  return Boolean(candidate.__draft_is_crossdock) || isCrossdockCandidate(candidate) ? "CROSSDOCK" : "DIRECT";
 }
 
 function resolveDraftFlow(candidate = {}) {
