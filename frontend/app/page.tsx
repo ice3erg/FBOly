@@ -362,6 +362,7 @@ export default function Home() {
   const [isCheckingConnection, setIsCheckingConnection] = useState(false);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [includeInternational, setIncludeInternational] = useState(false);
   const [warehouses, setWarehouses] =
     useState<WarehousePercentage[]>(DEFAULT_WAREHOUSES);
   const [result, setResult] = useState<ProcessResponse | null>(null);
@@ -826,6 +827,7 @@ export default function Home() {
     if (apiKey.trim()) {
       formData.append("ozon_api_key", apiKey.trim());
     }
+    formData.append("ozon_include_international", includeInternational ? "true" : "false");
 
     try {
       const response = await fetch(`${API_URL}/api/process`, {
@@ -1301,6 +1303,8 @@ export default function Home() {
               isCreatingDrafts={isCreatingDrafts}
               clientId={clientId}
               apiKey={apiKey}
+              includeInternational={includeInternational}
+              onToggleInternational={setIncludeInternational}
             />
           )}
           {activeView === "slotHunter" && (
@@ -1473,6 +1477,8 @@ function SupplyView({
   onOpenSlotHunter,
   clientId,
   apiKey,
+  includeInternational,
+  onToggleInternational,
 }: {
   stores: OzonStore[];
   activeStore: OzonStore | null;
@@ -1492,6 +1498,8 @@ function SupplyView({
   hasFullCredentials: boolean;
   clientId: string;
   apiKey: string;
+  includeInternational: boolean;
+  onToggleInternational: (v: boolean) => void;
   onSelectStore: (storeId: string) => void;
   onOpenProfile: () => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -1616,15 +1624,26 @@ function SupplyView({
           </label>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={downloadInputTemplate}
-              className="w-fit gap-2 text-primary"
-            >
-              <Download className="h-4 w-4" />
-              Скачать шаблон Excel
-            </Button>
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={downloadInputTemplate}
+                  className="w-fit gap-2 text-primary"
+                >
+                  <Download className="h-4 w-4" />
+                  Скачать шаблон Excel
+                </Button>
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={includeInternational}
+                    onChange={(e) => onToggleInternational(e.target.checked)}
+                    className="h-4 w-4 rounded border-white/20 accent-primary"
+                  />
+                  Включая другие страны (Казахстан, Беларусь, Армения)
+                </label>
+              </div>
             <Button
               type="submit"
               disabled={!selectedFile || !hasFullCredentials || isLoading}

@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-28-max-geography-smart-distribution";
+const APP_VERSION = "2026-06-28-smart-geography-volume-aware";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -41,7 +41,7 @@ const NEW_PRODUCT_MAJOR_WAREHOUSES = [
 ];
 const CITY_CLUSTER_RULES = [
   { name: "Дальний Восток", pattern: /(дальн.*вост|владивосток|хабаров|благовещен|сахалин|якут|камчат|уссур)/i },
-  { name: "Москва, МО и Дальние регионы", pattern: /(моск|мо\b|м\.о|московск|хоруг|пушки|жук|домод|давид|петровск|томилино|софьино|гривно|ногин|электростал|чехов|подольск|раменск|коледино|тула|калуг|рязан|владимир|иванов|костром|смолен|брянск|центр|хаб_мск|мск)/i },
+  { name: "Москва, МО и Дальние регионы", pattern: /(моск|мо\b|м\.о|московск|хоруг|пушки|жук|домод|давид|петровск|томилино|софьино|гривно|ногин|электростал|чехов|подольск|раменск|коледино|тула|калуг|рязан|владимир|иванов|костром|смолен|брянск|центр|хаб_мск|мск|ватутинки)/i },
   { name: "Тверь", pattern: /(твер)/i },
   { name: "Ярославль", pattern: /(ярослав)/i },
   { name: "Санкт-Петербург и СЗО", pattern: /(санкт|спб|питер|ленинград|сзо|шушар|бугр|парнас|волхон|колпино|порошкино|московское|северо)/i },
@@ -59,10 +59,13 @@ const CITY_CLUSTER_RULES = [
   { name: "Тюмень", pattern: /(тюм|тура)/i },
   { name: "Красноярск", pattern: /(краснояр)/i },
   { name: "Саратов", pattern: /(саратов)/i },
+  { name: "Волгоград", pattern: /(волгоград|волгогр)/i },
+  { name: "Кемерово", pattern: /(кемеров|кузбасс|новокузнецк)/i },
   { name: "Калининград", pattern: /(калининград)/i },
-  { name: "Беларусь", pattern: /(беларус|минск)/i },
-  { name: "Астана", pattern: /(астан)/i },
-  { name: "Алматы", pattern: /(алмат)/i },
+  { name: "Беларусь", pattern: /(беларус|минск)/i, international: true },
+  { name: "Астана", pattern: /(астан)/i, international: true },
+  { name: "Алматы", pattern: /(алмат)/i, international: true },
+  { name: "Ереван", pattern: /(ереван|армени)/i, international: true },
   { name: "Махачкала", pattern: /(махачкал|дагест)/i },
   { name: "Невинномысск", pattern: /(невинномыс)/i },
 ];
@@ -706,7 +709,9 @@ const server = http.createServer(async (req, res) => {
       const client = clientId && apiKey ? new OzonClient(clientId, apiKey) : null;
       const { resolved, errors } = await resolveItems(items, client);
       const distributionPlan = client
-        ? await buildSmartDistributionPlan(client, resolved, normalizedManualWarehouses)
+        ? await buildSmartDistributionPlan(client, resolved, normalizedManualWarehouses, {
+            includeInternational: form.fields.ozon_include_international === "true",
+          })
         : createManualDistributionPlan(normalizedManualWarehouses, "Нет API-ключей, используется ручное распределение");
       const files = createWarehouseFiles(resolved, distributionPlan.warehouses, distributionPlan);
       const draftCandidates = client ? createDraftCandidates(resolved, distributionPlan.warehouses, distributionPlan) : [];
@@ -2851,7 +2856,8 @@ function uniqueWarehouses(warehouses) {
   return result;
 }
 
-async function buildSmartDistributionPlan(client, items, manualWarehouses) {
+async function buildSmartDistributionPlan(client, items, manualWarehouses, options = {}) {
+  const includeInternational = Boolean(options.includeInternational);
   const skus = [...new Set(items.map((item) => item.sku).filter(Boolean).map(String))];
   if (!skus.length) {
     return createManualDistributionPlan(
@@ -2888,7 +2894,11 @@ async function buildSmartDistributionPlan(client, items, manualWarehouses) {
     regionalSalesBySku,
     manualWarehouses,
   });
-  const targetWarehouses = applyManualWarehouseMetadata(autoWarehouses, manualWarehouses);
+  // Фильтр зарубежных кластеров: по умолчанию исключаем (не все везут за рубеж)
+  const filteredWarehouses = includeInternational
+    ? autoWarehouses
+    : autoWarehouses.filter((w) => !isInternationalCluster(w.name));
+  const targetWarehouses = applyManualWarehouseMetadata(filteredWarehouses, manualWarehouses);
   const distributionIndexes = {
     turnoverBySku,
     stocksBySkuWarehouse,
@@ -2955,11 +2965,13 @@ function createManualDistributionPlan(warehouses, note) {
   };
 }
 
-function selectOutputClustersByMinimumQuantity(items, warehouses, indexes, minQuantity) {
+function selectOutputClustersByMinimumQuantity(items, warehouses, indexes, _minQuantity) {
   if (!warehouses.length) return warehouses;
   if (warehouses.length === 1) return warehouses;
 
-  // Считаем сколько единиц уйдёт в каждый кластер
+  const totalQuantity = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+
+  // Считаем распределение по всем кластерам
   const totals = new Map(warehouses.map((w) => [w.name, 0]));
   for (const item of items) {
     const weights = buildSmartWeights(item, warehouses, indexes);
@@ -2969,23 +2981,25 @@ function selectOutputClustersByMinimumQuantity(items, warehouses, indexes, minQu
     }
   }
 
-  // Разделяем кластеры на три категории:
-  // 1. С продажами — оставляем всегда (это реальный спрос)
-  // 2. Без продаж но с хоть 1 единицей — оставляем (расширение географии)
-  // 3. Получили 0 единиц — убираем (математически нечего везти)
-  const hasAnySales = (warehouseName) => {
-    for (const salesMap of indexes.regionalSalesBySku.values()) {
-      if ((salesMap.get(warehouseName) || 0) > 0) return true;
-    }
-    return false;
-  };
+  // Умный минимум на кластер: зависит от общего объёма партии
+  // < 50 шт  → минимум 5 шт (нет смысла везти 2 штуки в регион)
+  // 50-200   → минимум 3 шт
+  // 200-500  → минимум 2 шт
+  // > 500    → минимум 1 шт (большой объём — расширяем географию максимально)
+  const minPerCluster = totalQuantity < 50 ? 5
+    : totalQuantity < 200 ? 3
+    : totalQuantity < 500 ? 2
+    : 1;
 
-  const withQuantity = warehouses.filter((w) => (totals.get(w.name) || 0) >= 1);
-  if (!withQuantity.length) {
-    // Если вообще ничего — берём топ 1
-    return [warehouses.sort((a, b) => (totals.get(b.name) || 0) - (totals.get(a.name) || 0))[0]];
+  const passing = warehouses.filter((w) => (totals.get(w.name) || 0) >= minPerCluster);
+
+  if (!passing.length) {
+    // Ничего не проходит порог — берём топ-кластер
+    const sorted = [...warehouses].sort((a, b) => (totals.get(b.name) || 0) - (totals.get(a.name) || 0));
+    return sorted.slice(0, 1);
   }
-  return withQuantity;
+
+  return passing;
 }
 
 function buildSmartWeights(item, warehouses, indexes) {
@@ -3341,6 +3355,12 @@ function isKnownSupplyCityCluster(name) {
   if (!key) return false;
   return CITY_CLUSTER_RULES.some((rule) => normalizeText(rule.name) === key)
     || NEW_PRODUCT_MAJOR_WAREHOUSES.some((warehouse) => normalizeText(warehouse.name) === key);
+}
+
+function isInternationalCluster(name) {
+  const key = normalizeText(toSupplyClusterName(name) || name);
+  if (!key) return false;
+  return CITY_CLUSTER_RULES.some((rule) => rule.international && normalizeText(rule.name) === key);
 }
 
 function titleCaseCluster(value) {
