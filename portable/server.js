@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-28-smart-geography-volume-aware";
+const APP_VERSION = "2026-06-28-no-missing-clusters-smart-min";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -93,7 +93,7 @@ const DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET = Number(process.env.DRAFT_CREA
 const DRAFT_CREATION_SPACING_MS = Number(process.env.DRAFT_CREATION_SPACING_MS || 8000);  // было 12s
 const TARGET_STOCK_DAYS = 21;
 const ANALYTICS_PERIOD_DAYS = 60; // 60 дней вместо 30 — больше данных по редким регионам
-const MIN_OUTPUT_CLUSTER_QUANTITY = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 1); // убираем отсечение по минимуму
+const MIN_OUTPUT_CLUSTER_QUANTITY = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 10); // минимум 10 шт на кластер
 const SLOT_HUNTER_DEFAULT_INTERVAL_SECONDS = 20;  // было 30s — можно чаще при 50 req/s
 const SLOT_HUNTER_MIN_INTERVAL_SECONDS = 10;  // было 15s
 const SLOT_HUNTER_DEFAULT_MAX_MINUTES = 240;
@@ -2898,7 +2898,17 @@ async function buildSmartDistributionPlan(client, items, manualWarehouses, optio
   const filteredWarehouses = includeInternational
     ? autoWarehouses
     : autoWarehouses.filter((w) => !isInternationalCluster(w.name));
-  const targetWarehouses = applyManualWarehouseMetadata(filteredWarehouses, manualWarehouses);
+  // Фильтруем кластеры без cluster_id — их нельзя создать как черновик Ozon.
+  // Если у кластера нет ни classic_cluster_ids ни cluster_ids — значит Ozon не
+  // открыл этот кластер для данного магазина (или он не существует в API).
+  const validWarehouses = filteredWarehouses.filter((w) => {
+    const classicIds = normalizeClassicDraftClusterIds(w.classic_cluster_ids || []);
+    const ids = uniqueStrings((w.cluster_ids || []).map(cleanIdentifier).filter(Boolean));
+    return classicIds.length > 0 || ids.length > 0;
+  });
+  // Если после фильтра ничего нет — используем все (fallback чтобы не сломать)
+  const usableWarehouses = validWarehouses.length > 0 ? validWarehouses : filteredWarehouses;
+  const targetWarehouses = applyManualWarehouseMetadata(usableWarehouses, manualWarehouses);
   const distributionIndexes = {
     turnoverBySku,
     stocksBySkuWarehouse,
@@ -2981,15 +2991,18 @@ function selectOutputClustersByMinimumQuantity(items, warehouses, indexes, _minQ
     }
   }
 
-  // Умный минимум на кластер: зависит от общего объёма партии
-  // < 50 шт  → минимум 5 шт (нет смысла везти 2 штуки в регион)
-  // 50-200   → минимум 3 шт
-  // 200-500  → минимум 2 шт
-  // > 500    → минимум 1 шт (большой объём — расширяем географию максимально)
-  const minPerCluster = totalQuantity < 50 ? 5
-    : totalQuantity < 200 ? 3
-    : totalQuantity < 500 ? 2
-    : 1;
+  // Умный минимум на кластер:
+  // - Берём настроенный минимум (по умолчанию 10 шт) как базу
+  // - При очень малых партиях можем снизить до половины минимума
+  //   (чтобы не остаться с 1-2 кластерами при 30 шт)
+  // - При больших партиях минимум может расти пропорционально
+  //   (нет смысла везти 10 шт если суммарно 2000 шт)
+  const configuredMin = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 10);
+  const minPerCluster = totalQuantity <= configuredMin * 3
+    ? Math.max(1, Math.floor(configuredMin / 2))   // очень мало — половина минимума
+    : totalQuantity <= configuredMin * 15
+      ? configuredMin                                // норма — настроенный минимум
+      : Math.max(configuredMin, Math.round(totalQuantity / 30)); // много — пропорционально
 
   const passing = warehouses.filter((w) => (totals.get(w.name) || 0) >= minPerCluster);
 
