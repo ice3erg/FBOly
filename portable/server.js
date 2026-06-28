@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-28-timing-fix-409-retry";
+const APP_VERSION = "2026-06-28-max-geography-smart-distribution";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -89,8 +89,8 @@ const DRAFT_CREATION_JOB_RATE_LIMIT_COOLDOWN_MS = Number(process.env.DRAFT_CREAT
 const DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET = Number(process.env.DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET || 8);
 const DRAFT_CREATION_SPACING_MS = Number(process.env.DRAFT_CREATION_SPACING_MS || 8000);  // было 12s
 const TARGET_STOCK_DAYS = 21;
-const ANALYTICS_PERIOD_DAYS = 30;
-const MIN_OUTPUT_CLUSTER_QUANTITY = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 15);
+const ANALYTICS_PERIOD_DAYS = 60; // 60 дней вместо 30 — больше данных по редким регионам
+const MIN_OUTPUT_CLUSTER_QUANTITY = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 1); // убираем отсечение по минимуму
 const SLOT_HUNTER_DEFAULT_INTERVAL_SECONDS = 20;  // было 30s — можно чаще при 50 req/s
 const SLOT_HUNTER_MIN_INTERVAL_SECONDS = 10;  // было 15s
 const SLOT_HUNTER_DEFAULT_MAX_MINUTES = 240;
@@ -2293,29 +2293,35 @@ class OzonClient {
   async getRegionalSalesBySku(skus) {
     if (!skus.length) return new Map();
     const { from, to } = getDateRange(ANALYTICS_PERIOD_DAYS);
-    const data = await this.post("/v1/analytics/data", {
-      date_from: from,
-      date_to: to,
-      metrics: ["ordered_units"],
-      dimension: ["sku", "region"],
-      filters: [],
-      sort: [{ key: "ordered_units", order: "DESC" }],
-      limit: 1000,
-      offset: 0,
-    });
     const allowed = new Set(skus.map(String));
-    const rows = data.result && Array.isArray(data.result.data) ? data.result.data : [];
     const result = new Map();
-    for (const row of rows) {
-      const dimensions = Array.isArray(row.dimensions) ? row.dimensions : [];
-      const sku = String((dimensions[0] && dimensions[0].id) || (dimensions[0] && dimensions[0].name) || "");
-      if (!allowed.has(sku)) continue;
-      const regionName = String((dimensions[1] && dimensions[1].name) || (dimensions[1] && dimensions[1].id) || "");
-      const warehouseName = toSupplyClusterName(regionName);
-      if (!warehouseName) continue;
-      const units = Number(Array.isArray(row.metrics) ? row.metrics[0] : 0) || 0;
-      if (!result.has(sku)) result.set(sku, new Map());
-      result.get(sku).set(warehouseName, (result.get(sku).get(warehouseName) || 0) + units);
+    let offset = 0;
+    // Пагинация — собираем все страницы, не останавливаясь на первой 1000 строк
+    while (offset < 10000) {
+      const data = await this.post("/v1/analytics/data", {
+        date_from: from,
+        date_to: to,
+        metrics: ["ordered_units"],
+        dimension: ["sku", "region"],
+        filters: [],
+        sort: [{ key: "ordered_units", order: "DESC" }],
+        limit: 1000,
+        offset,
+      });
+      const rows = data.result && Array.isArray(data.result.data) ? data.result.data : [];
+      for (const row of rows) {
+        const dimensions = Array.isArray(row.dimensions) ? row.dimensions : [];
+        const sku = String((dimensions[0] && dimensions[0].id) || (dimensions[0] && dimensions[0].name) || "");
+        if (!allowed.has(sku)) continue;
+        const regionName = String((dimensions[1] && dimensions[1].name) || (dimensions[1] && dimensions[1].id) || "");
+        const warehouseName = toSupplyClusterName(regionName);
+        if (!warehouseName) continue;
+        const units = Number(Array.isArray(row.metrics) ? row.metrics[0] : 0) || 0;
+        if (!result.has(sku)) result.set(sku, new Map());
+        result.get(sku).set(warehouseName, (result.get(sku).get(warehouseName) || 0) + units);
+      }
+      if (rows.length < 1000) break; // последняя страница
+      offset += rows.length;
     }
     return result;
   }
@@ -2906,8 +2912,10 @@ async function buildSmartDistributionPlan(client, items, manualWarehouses) {
   return {
     mode: "smart",
     warehouses: activeWarehouses,
-    note: `Распределение рассчитано по ${targetWarehouses.length} складам/регионам Ozon. Новые товары без продаж идут на крупные склады, склады без потребности пропущены. ` + diagnostics.join("; "),
-    note: `Smart distribution: ${activeWarehouses.length} Ozon clusters, minimum ${MIN_OUTPUT_CLUSTER_QUANTITY} pcs per output cluster. Small directions are redistributed. ` + diagnostics.join("; "),
+    note: `Умное распределение по ${activeWarehouses.length} из ${targetWarehouses.length} кластеров Ozon. ` +
+      `Период аналитики: ${ANALYTICS_PERIOD_DAYS} дней. ` +
+      `Кластеры без товаров исключены, кластеры без продаж получают минимальный вес для расширения географии. ` +
+      diagnostics.join("; "),
     distributeItem(item) {
       return distributeByWeights(
         item.quantity,
@@ -2950,30 +2958,34 @@ function createManualDistributionPlan(warehouses, note) {
 function selectOutputClustersByMinimumQuantity(items, warehouses, indexes, minQuantity) {
   if (!warehouses.length) return warehouses;
   if (warehouses.length === 1) return warehouses;
-  let active = warehouses;
-  for (let iteration = 0; iteration < warehouses.length; iteration += 1) {
-    const totals = new Map(active.map((warehouse) => [warehouse.name, 0]));
-    for (const item of items) {
-      const weights = buildSmartWeights(item, active, indexes);
-      const distribution = distributeByWeights(item.quantity, active, weights, { allowEmpty: true });
-      for (const [warehouseName, quantity] of Object.entries(distribution)) {
-        totals.set(warehouseName, (totals.get(warehouseName) || 0) + Number(quantity || 0));
-      }
+
+  // Считаем сколько единиц уйдёт в каждый кластер
+  const totals = new Map(warehouses.map((w) => [w.name, 0]));
+  for (const item of items) {
+    const weights = buildSmartWeights(item, warehouses, indexes);
+    const distribution = distributeByWeights(item.quantity, warehouses, weights, { allowEmpty: true });
+    for (const [name, qty] of Object.entries(distribution)) {
+      totals.set(name, (totals.get(name) || 0) + Number(qty || 0));
     }
-    const keepNames = new Set(
-      [...totals.entries()]
-        .filter(([, quantity]) => quantity >= minQuantity)
-        .map(([name]) => name),
-    );
-    if (!keepNames.size) {
-      const topWarehouse = [...active]
-        .sort((a, b) => (totals.get(b.name) || 0) - (totals.get(a.name) || 0))[0];
-      return topWarehouse ? [topWarehouse] : active;
-    }
-    if (keepNames.size === active.length) return active;
-    active = active.filter((warehouse) => keepNames.has(warehouse.name));
   }
-  return active;
+
+  // Разделяем кластеры на три категории:
+  // 1. С продажами — оставляем всегда (это реальный спрос)
+  // 2. Без продаж но с хоть 1 единицей — оставляем (расширение географии)
+  // 3. Получили 0 единиц — убираем (математически нечего везти)
+  const hasAnySales = (warehouseName) => {
+    for (const salesMap of indexes.regionalSalesBySku.values()) {
+      if ((salesMap.get(warehouseName) || 0) > 0) return true;
+    }
+    return false;
+  };
+
+  const withQuantity = warehouses.filter((w) => (totals.get(w.name) || 0) >= 1);
+  if (!withQuantity.length) {
+    // Если вообще ничего — берём топ 1
+    return [warehouses.sort((a, b) => (totals.get(b.name) || 0) - (totals.get(a.name) || 0))[0]];
+  }
+  return withQuantity;
 }
 
 function buildSmartWeights(item, warehouses, indexes) {
@@ -2984,40 +2996,46 @@ function buildSmartWeights(item, warehouses, indexes) {
   const salesByWarehouse = matchMetricsToWarehouses(regionalSales, warehouses);
   const regionalTotal = sumValues(salesByWarehouse);
   const stocksByWarehouse = matchMetricsToWarehouses(stocks, warehouses);
-  const stockTotal = sumValues(stocksByWarehouse);
 
-  const baseSalesShares = {};
-  for (const warehouse of warehouses) {
-    if (regionalTotal > 0) {
-      baseSalesShares[warehouse.name] = (salesByWarehouse.get(warehouse.name) || 0) / regionalTotal;
-    } else if (stockTotal > 0) {
-      baseSalesShares[warehouse.name] = (stocksByWarehouse.get(warehouse.name) || 0) / stockTotal;
-    } else {
-      baseSalesShares[warehouse.name] = 0;
-    }
-  }
+  // Оборачиваемость: берём turnover_days если есть, иначе считаем из продаж
+  const turnoverDays = Number(turnover.turnoverDays || 0);
+  const dailySalesFromTurnover = Number(turnover.dailySales || 0);
+  const dailySalesFromRegional = regionalTotal > 0 ? regionalTotal / ANALYTICS_PERIOD_DAYS : 0;
+  const totalDailySales = dailySalesFromTurnover || dailySalesFromRegional;
 
-  if (regionalTotal <= 0 && stockTotal <= 0) {
+  // Целевой запас: адаптируется к скорости оборота
+  // Быстрооборотный товар (turnoverDays < 10) → меньше дней запаса (не надо морозить деньги)
+  // Медленный (turnoverDays > 30) → тоже меньше (не стоит забивать склад)
+  // Оптимум около 21 дня
+  const effectiveTargetDays = turnoverDays > 0
+    ? Math.min(30, Math.max(7, turnoverDays * 0.8))
+    : TARGET_STOCK_DAYS;
+
+  const weights = {};
+
+  if (regionalTotal <= 0) {
+    // Нет истории продаж — новый товар или нет данных.
+    // Расширяем географию: посылаем во ВСЕ доступные кластеры с весами из fallback
     return getNewProductFallbackWeights(warehouses);
   }
 
-  const totalDailySales = Number(turnover.dailySales || 0) || Math.max(regionalTotal / ANALYTICS_PERIOD_DAYS, 0);
-  const weights = {};
   for (const warehouse of warehouses) {
-    const share = baseSalesShares[warehouse.name] || 0;
-    if (share <= 0) {
-      weights[warehouse.name] = 0;
-      continue;
-    }
+    const salesShare = (salesByWarehouse.get(warehouse.name) || 0) / regionalTotal;
     const currentStock = Number(getMatchedMetric(stocks, warehouse.name) || 0);
     const targetStock = totalDailySales > 0
-      ? totalDailySales * TARGET_STOCK_DAYS * share
-      : item.quantity * share;
+      ? totalDailySales * effectiveTargetDays * salesShare
+      : item.quantity * salesShare;
     const deficit = Math.max(0, targetStock - currentStock);
-    if (regionalTotal > 0) {
-      weights[warehouse.name] = deficit * 3 + share * Math.max(totalDailySales, 1);
+
+    if (salesShare > 0) {
+      // Кластер с продажами: дефицит × 3 + объём продаж
+      weights[warehouse.name] = deficit * 3 + salesShare * Math.max(totalDailySales, 1);
     } else {
-      weights[warehouse.name] = share * Math.max(item.quantity, 1);
+      // Кластер без продаж этого товара, но он существует как склад Ozon.
+      // Даём минимальный вес чтобы расширять географию — товар может там продаться.
+      // Вес = 2% от минимального продающего кластера (не 0, но не конкурирует с продающими)
+      const minSellingWeight = Math.min(...Object.values(weights).filter((v) => v > 0), Infinity);
+      weights[warehouse.name] = Number.isFinite(minSellingWeight) ? minSellingWeight * 0.02 : 0;
     }
   }
 
@@ -3025,24 +3043,26 @@ function buildSmartWeights(item, warehouses, indexes) {
 }
 
 function getNewProductFallbackWeights(warehouses) {
-  const weights = Object.fromEntries(warehouses.map((warehouse) => [warehouse.name, 0]));
-  let matchedGroups = 0;
-
+  // Новый товар — нет истории продаж. Цель: максимальное покрытие географии.
+  // Распределяем по ВСЕМ доступным кластерам Ozon.
+  // Крупные кластеры получают чуть больший приоритет (по данным из NEW_PRODUCT_MAJOR_WAREHOUSES),
+  // но ни один кластер не получает нулевой вес — это новый товар, пусть Ozon сам определит спрос.
+  const weights = {};
+  // Базовый вес для всех — равномерное покрытие
+  const baseWeight = 1;
+  for (const warehouse of warehouses) {
+    weights[warehouse.name] = baseWeight;
+  }
+  // Приоритетные кластеры получают буст по известным весам
   for (const major of NEW_PRODUCT_MAJOR_WAREHOUSES) {
-    const matches = warehouses.filter((warehouse) => normalizeText(warehouse.name) === normalizeText(major.name) || major.pattern.test(normalizeText(warehouse.name)));
-    if (!matches.length) continue;
-    matchedGroups += 1;
-    for (const warehouse of matches) {
-      weights[warehouse.name] += major.weight / matches.length;
+    for (const warehouse of warehouses) {
+      const normalized = normalizeText(warehouse.name);
+      if (normalizeText(major.name) === normalized || major.pattern.test(normalized)) {
+        // Буст: major.weight / 10 добавляется к базе (например Москва: +3.5, СПб: +2.5)
+        weights[warehouse.name] = (weights[warehouse.name] || baseWeight) + major.weight / 10;
+      }
     }
   }
-
-  if (matchedGroups > 0) return weights;
-
-  const fallbackWeights = NEW_PRODUCT_MAJOR_WAREHOUSES.map((item) => item.weight);
-  warehouses.slice(0, fallbackWeights.length).forEach((warehouse, index) => {
-    weights[warehouse.name] = fallbackWeights[index];
-  });
   return weights;
 }
 
