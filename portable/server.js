@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-28-supply-type-string-from-docs";
+const APP_VERSION = "2026-06-28-timing-fix-409-retry";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -71,28 +71,28 @@ const OZON_DRAFT_MAX_RETRIES = 3;
 const OZON_MIN_REQUEST_DELAY_MS = 450;
 const OZON_GLOBAL_MIN_REQUEST_DELAY_MS = Number(process.env.OZON_GLOBAL_MIN_REQUEST_DELAY_MS || 2500);
 const OZON_GLOBAL_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_GLOBAL_RATE_LIMIT_COOLDOWN_MS || 60000);
-const OZON_DRAFT_REQUEST_DELAY_MS = 1200;
-const OZON_DRAFT_CREATE_QUIET_PERIOD_MS = Number(process.env.OZON_DRAFT_CREATE_QUIET_PERIOD_MS || 15000);
-const OZON_DRAFT_CANDIDATE_DELAY_MS = 3000;
-const OZON_DRAFT_POLL_DELAY_MS = 2500;
-const OZON_SLOT_REQUEST_DELAY_MS = 3500;
-const OZON_SLOT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_SLOT_RATE_LIMIT_COOLDOWN_MS || 12000);
-const OZON_BOOKING_RATE_LIMIT_COOLDOWN_MS = 180000;
-const OZON_SLOT_DRAFT_SPACING_MS = 30000;
-const OZON_AFTER_DRAFT_SLOT_DELAY_MS = 20000;
-const OZON_BEFORE_BOOKING_DELAY_MS = 15000;
-const OZON_CLASSIC_DRAFT_POLL_DELAY_MS = Number(process.env.OZON_CLASSIC_DRAFT_POLL_DELAY_MS || 20000);
+const OZON_DRAFT_REQUEST_DELAY_MS = 2000;
+const OZON_DRAFT_CREATE_QUIET_PERIOD_MS = Number(process.env.OZON_DRAFT_CREATE_QUIET_PERIOD_MS || 10000);
+const OZON_DRAFT_CANDIDATE_DELAY_MS = 2000;
+const OZON_DRAFT_POLL_DELAY_MS = 2000;
+const OZON_SLOT_REQUEST_DELAY_MS = 1500;  // лимит 50 req/s — 1.5s хватает с запасом
+const OZON_SLOT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_SLOT_RATE_LIMIT_COOLDOWN_MS || 6000); // было 12s
+const OZON_BOOKING_RATE_LIMIT_COOLDOWN_MS = 60000;  // было 180s — завышено
+const OZON_SLOT_DRAFT_SPACING_MS = 20000;  // было 30s
+const OZON_AFTER_DRAFT_SLOT_DELAY_MS = 10000;  // было 20s
+const OZON_BEFORE_BOOKING_DELAY_MS = 8000;  // было 15s
+const OZON_CLASSIC_DRAFT_POLL_DELAY_MS = Number(process.env.OZON_CLASSIC_DRAFT_POLL_DELAY_MS || 15000);
 const OZON_CLASSIC_DRAFT_INFO_MAX_ATTEMPTS = Number(process.env.OZON_CLASSIC_DRAFT_INFO_MAX_ATTEMPTS || 7);
-const OZON_DRAFT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_DRAFT_RATE_LIMIT_COOLDOWN_MS || 15000);
+const OZON_DRAFT_RATE_LIMIT_COOLDOWN_MS = Number(process.env.OZON_DRAFT_RATE_LIMIT_COOLDOWN_MS || 10000);
 const OZON_DRAFT_CREATE_ROUTE_MAX_ATTEMPTS = Number(process.env.OZON_DRAFT_CREATE_ROUTE_MAX_ATTEMPTS || 1);
-const DRAFT_CREATION_JOB_RATE_LIMIT_COOLDOWN_MS = Number(process.env.DRAFT_CREATION_JOB_RATE_LIMIT_COOLDOWN_MS || 25000);
+const DRAFT_CREATION_JOB_RATE_LIMIT_COOLDOWN_MS = Number(process.env.DRAFT_CREATION_JOB_RATE_LIMIT_COOLDOWN_MS || 15000);
 const DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET = Number(process.env.DRAFT_CREATION_JOB_MAX_ATTEMPTS_PER_TARGET || 8);
-const DRAFT_CREATION_SPACING_MS = Number(process.env.DRAFT_CREATION_SPACING_MS || 12000);
+const DRAFT_CREATION_SPACING_MS = Number(process.env.DRAFT_CREATION_SPACING_MS || 8000);  // было 12s
 const TARGET_STOCK_DAYS = 21;
 const ANALYTICS_PERIOD_DAYS = 30;
 const MIN_OUTPUT_CLUSTER_QUANTITY = Number(process.env.MIN_OUTPUT_CLUSTER_QUANTITY || 15);
-const SLOT_HUNTER_DEFAULT_INTERVAL_SECONDS = 30;
-const SLOT_HUNTER_MIN_INTERVAL_SECONDS = 15;
+const SLOT_HUNTER_DEFAULT_INTERVAL_SECONDS = 20;  // было 30s — можно чаще при 50 req/s
+const SLOT_HUNTER_MIN_INTERVAL_SECONDS = 10;  // было 15s
 const SLOT_HUNTER_DEFAULT_MAX_MINUTES = 240;
 const SLOT_HUNTER_MAX_ATTEMPTS_PER_TARGET = 2000;
 
@@ -1058,6 +1058,14 @@ class OzonClient {
       if (response.status === 429 && attempt < maxRetries) {
         const retryDelayMs = getOzonRateLimitDelayMs(response, attempt, options);
         markGlobalOzonRateLimit(this.clientId, throttleScope, retryDelayMs);
+        await sleep(retryDelayMs);
+        continue;
+      }
+
+      // 409 Conflict — временная ошибка Ozon (предыдущая операция ещё не завершена).
+      // Документация: "Дождитесь завершения предыдущей операции". Повторяем с паузой.
+      if (response.status === 409 && attempt < maxRetries && !options.no409Retry) {
+        const retryDelayMs = Math.min(30000, 3000 * (attempt + 1));
         await sleep(retryDelayMs);
         continue;
       }
