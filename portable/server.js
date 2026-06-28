@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-full-trace";
+const APP_VERSION = "2026-06-25-remove-old-crossdock-block";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1450,6 +1450,9 @@ class OzonClient {
       });
       // Ставим флаг всегда, даже при null — иначе каждая попытка бьёт draft/create/info
       candidate.__draft_type_resolved = true;
+      // Сбрасываем старый кэш __crossdock_check_done — он мог быть установлен
+      // предыдущими версиями кода и конфликтовать с новой логикой
+      delete candidate.__crossdock_check_done;
       if (info) {
         const clusters = Array.isArray(info.clusters) ? info.clusters : [];
         // Тип черновика — только из верхнего уровня draft_info, НЕ из clusters.supply_type
@@ -1536,104 +1539,6 @@ class OzonClient {
       throw new Error("Crossdock: Ozon не принял ни один вариант");
     }
 
-    if (resolveDraftFlow(candidate) === "classic") {
-      _step("classic_branch");
-      // classic flow и /v1/draft/timeslot/info отключены — идём через v2 как direct
-      const selectedWarehouses = await this.resolveSelectedClusterWarehouses(draftId, candidate);
-      return await this.postWithSelectedClusterWarehouseVariants("/v2/draft/timeslot/info", {
-        draft_id: numericDraftId || draftId,
-        date_from: dateFrom,
-        date_to: dateTo,
-        supply_type: resolveSupplyType(candidate),
-      }, selectedWarehouses, slotOptions);
-    }
-    // Direct: только v2. Но сначала надёжно проверим — вдруг это crossdock-черновик.
-    // Сигналы: supply_mode кандидата, drop_off_point, supply_type в самом черновике.
-    if (candidate.__crossdock_check_done !== true) {
-      _step("old_crossdock_check");
-      const directDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
-        if (e.status === 429) throw e;
-        return null;
-      });
-      if (directDraftInfo) {
-        const draftSupplyTypeStr = String(directDraftInfo.supply_type || directDraftInfo.supplyType || directDraftInfo.create_type || directDraftInfo.createType || "").toUpperCase();
-        const isCd = draftSupplyTypeStr.includes("CROSSDOCK") || draftSupplyTypeStr === "2";
-        candidate.__crossdock_check_done = isCd;
-        if (isCd) {
-          candidate.supply_mode = "crossdock";
-          candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(directDraftInfo, candidate);
-          candidate.__crossdock_draft_dump = safeJsonSnippet(directDraftInfo, 1800);
-          candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(directDraftInfo);
-        } else {
-          // DIRECT — кэшируем warehouses прямо сейчас
-          candidate.__direct_selected_warehouses = extractSelectedClusterWarehousesFromDraftInfo(directDraftInfo, candidate.cluster_ids);
-          candidate.__direct_draft_dump = safeJsonSnippet(directDraftInfo, 800);
-        }
-      }
-    }
-    if (candidate.__crossdock_check_done === true) {
-      _step("old_crossdock_true_branch");
-      // Если macrolocal ещё не добыт (быстрый сигнал сработал) — добираем из черновика
-      if (!candidate.__crossdock_macrolocal || !candidate.__crossdock_macrolocal.length) {
-        const cdDraftInfo = await this.getSupplyDraftInfoByDraftId(draftId).catch((e) => {
-          if (e.status === 429) throw e;
-          return null;
-        });
-        if (cdDraftInfo) {
-          candidate.__crossdock_macrolocal = extractCrossdockMacrolocalIds(cdDraftInfo, candidate);
-          candidate.__crossdock_draft_dump = safeJsonSnippet(cdDraftInfo, 1800);
-          candidate.__crossdock_warehouse_ids = extractCrossdockWarehouseIds(cdDraftInfo);
-        }
-      }
-      const macrolocalIds = candidate.__crossdock_macrolocal || [];
-      if (macrolocalIds.length) {
-        const crossdockBase = {
-          draft_id: numericDraftId || draftId,
-          date_from: dateFrom,
-          date_to: dateTo,
-          supply_type: 2,
-        };
-        const dropOffId = toPositiveIntegerId(getDropOffPointWarehouseId(candidate));
-        const draftWhIds = candidate.__crossdock_warehouse_ids || [];
-        // Перебираем варианты payload для crossdock
-        const variants = [];
-        // 1. только macrolocal
-        variants.push(macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id })));
-        // 2. macrolocal + storage из самого черновика (если есть)
-        if (draftWhIds.length) {
-          variants.push(macrolocalIds.flatMap((id) => draftWhIds.slice(0, 5).map((wh) => ({ macrolocal_cluster_id: id, storage_warehouse_id: wh }))).slice(0, 20));
-        }
-        // 3. macrolocal + drop-off как storage
-        if (dropOffId) {
-          variants.push(macrolocalIds.slice(0, 20).map((id) => ({ macrolocal_cluster_id: id, storage_warehouse_id: dropOffId })));
-        }
-        let lastErr = null;
-        const vErrors = [];
-        for (const supply_type of [2, 1, 3]) {
-          for (const selected_cluster_warehouses of variants) {
-            try {
-              const data = await this.post("/v2/draft/timeslot/info", { ...crossdockBase, supply_type, selected_cluster_warehouses }, slotOptions);
-              if (data && typeof data === "object" && !Array.isArray(data)) {
-                data.__request_variant = { supply_type, selected_cluster_warehouses };
-              }
-              return data;
-            } catch (error) {
-              lastErr = error;
-              if (error.status === 429) throw error;
-              if (isSelectedClusterWarehousesValidationError(error) || isSupplyTypeValidationError(error)) {
-                vErrors.push(`st=${supply_type} ${JSON.stringify(selected_cluster_warehouses).slice(0, 120)} -> ${(error.message || "").replace(/Если ошибка.*$/s, "").replace(/Request validation error: /,"").slice(0, 150)}`);
-                continue;
-              }
-              throw error;
-            }
-          }
-        }
-        if (lastErr) {
-          lastErr.message = `Crossdock не нашёл слот. [variant_errors: ${vErrors.join(" || ")}] [draft_info: ${candidate.__crossdock_draft_dump}]`;
-          throw lastErr;
-        }
-      }
-    }
     // DIRECT: v2 timeslot требует warehouse_ids
     _step("direct_branch");
     const directWarehouseIds = (
