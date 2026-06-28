@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
-const APP_VERSION = "2026-06-25-crossdock-from-cluster-type";
+const APP_VERSION = "2026-06-25-crossdock-by-null-storage";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
@@ -1460,14 +1460,18 @@ class OzonClient {
       delete candidate.__crossdock_check_done;
       if (info) {
         const clusters = Array.isArray(info.clusters) ? info.clusters : [];
-        // Тип черновика: сначала верхний уровень, затем clusters[].supply_type
-        // (для некоторых черновиков верхний уровень пуст, тип только в кластере)
-        const topLevelType = String(info.supply_type || info.supplyType || info.create_type || info.createType || "").toUpperCase();
-        const clusterType = clusters.map((c) => String(c.supply_type || c.supplyType || "").toUpperCase()).find(Boolean) || "";
-        const effectiveType = topLevelType || clusterType;
-        const isCd = effectiveType.includes("CROSSDOCK") || effectiveType === "2";
+        // Надёжный признак crossdock: storage_warehouse = null во всех кластерах.
+        // clusters[].supply_type показывает ДОСТУПНЫЕ типы кластера (не тип черновика),
+        // верхний info.supply_type часто пуст. Единственный надёжный сигнал:
+        // - crossdock: склад назначается после сортировки → storage_warehouse: null
+        // - direct: склад уже выбран → storage_warehouse: { id: ..., name: ... }
+        const allWarehouses = clusters.flatMap((c) => Array.isArray(c.warehouses) ? c.warehouses : []);
+        const hasStorageWarehouse = allWarehouses.some((w) => w.storage_warehouse && w.storage_warehouse !== null && typeof w.storage_warehouse === "object" && Object.keys(w.storage_warehouse).length > 0);
+        const hasNullStorage = allWarehouses.some((w) => w.storage_warehouse === null);
+        // crossdock = null storage AND нет ни одного реального склада
+        const isCd = hasNullStorage && !hasStorageWarehouse;
         candidate.__draft_is_crossdock = isCd;
-        // Macrolocal ids берём из кластеров напрямую
+        // macrolocal из кластеров
         candidate.__crossdock_macrolocal = clusters
           .map((c) => toPositiveIntegerId(c.macrolocal_cluster_id))
           .filter((id) => id && id >= 1000);
@@ -1481,7 +1485,7 @@ class OzonClient {
           candidate.__direct_draft_dump = safeJsonSnippet(info, 800);
         }
         if (isCd) candidate.supply_mode = "crossdock";
-        candidate.__draft_type_diag = `isCd=${isCd} top="${topLevelType}" cluster="${clusterType}" macrolocal=${JSON.stringify(candidate.__crossdock_macrolocal)}`;
+        candidate.__draft_type_diag = `isCd=${isCd} hasStorage=${hasStorageWarehouse} hasNull=${hasNullStorage} macrolocal=${JSON.stringify(candidate.__crossdock_macrolocal)} directWh=${JSON.stringify((candidate.__direct_warehouse_ids_from_draft||[]).slice(0,2))}`;
       } else {
         // draft_info недоступен — определяем по полям кандидата, но не по drop_off
         // (drop_off есть у всех кандидатов кластера, не только crossdock)
