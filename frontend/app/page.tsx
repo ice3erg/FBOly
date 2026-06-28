@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 import {
   Activity,
@@ -8,6 +8,7 @@ import {
   ArrowRight,
   BarChart3,
   Building2,
+  CalendarCheck,
   CheckCircle2,
   ChevronRight,
   Cloud,
@@ -1298,6 +1299,8 @@ export default function Home() {
               onOpenSlotHunter={() => setActiveView("slotHunter")}
               draftStatus={draftStatus}
               isCreatingDrafts={isCreatingDrafts}
+              clientId={clientId}
+              apiKey={apiKey}
             />
           )}
           {activeView === "slotHunter" && (
@@ -1468,6 +1471,8 @@ function SupplyView({
   onCreateOzonDrafts,
   onSearchCrossdockPoints,
   onOpenSlotHunter,
+  clientId,
+  apiKey,
 }: {
   stores: OzonStore[];
   activeStore: OzonStore | null;
@@ -1485,6 +1490,8 @@ function SupplyView({
   totalPercentage: number;
   hasWarehouseWeights: boolean;
   hasFullCredentials: boolean;
+  clientId: string;
+  apiKey: string;
   onSelectStore: (storeId: string) => void;
   onOpenProfile: () => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -1665,6 +1672,8 @@ function SupplyView({
                 onOpenSlotHunter={onOpenSlotHunter}
                 draftStatus={draftStatus}
                 isCreatingDrafts={isCreatingDrafts}
+                clientId={clientId}
+                apiKey={apiKey}
               />
             </div>
           </StepSection>
@@ -1984,6 +1993,8 @@ function ResultPanel({
   onOpenSlotHunter,
   draftStatus,
   isCreatingDrafts,
+  clientId,
+  apiKey,
 }: {
   result: ProcessResponse;
   onDownloadZip: () => void;
@@ -1994,6 +2005,8 @@ function ResultPanel({
   onOpenSlotHunter: () => void;
   draftStatus: DraftStatus | null;
   isCreatingDrafts: boolean;
+  clientId: string;
+  apiKey: string;
 }) {
   const canDownloadZip =
     Boolean(result.archive_base64) ||
@@ -2010,6 +2023,8 @@ function ResultPanel({
           onCreate={onCreateOzonDrafts}
           onSearchCrossdockPoints={onSearchCrossdockPoints}
           onOpenSlotHunter={onOpenSlotHunter}
+          clientId={clientId}
+          apiKey={apiKey}
         />
       )}
 
@@ -2110,6 +2125,8 @@ function DraftCreationPanel({
   onCreate,
   onSearchCrossdockPoints,
   onOpenSlotHunter,
+  clientId,
+  apiKey,
 }: {
   candidates: DraftCandidate[];
   status: DraftStatus | null;
@@ -2117,6 +2134,8 @@ function DraftCreationPanel({
   onCreate: (candidates: DraftCandidate[]) => void;
   onSearchCrossdockPoints: (search: string) => Promise<CrossdockPoint[]>;
   onOpenSlotHunter: () => void;
+  clientId: string;
+  apiKey: string;
 }) {
   const [selectedWarehouses, setSelectedWarehouses] = useState<string[]>([]);
   const [supplyMode, setSupplyMode] = useState<"direct" | "crossdock">("direct");
@@ -2127,6 +2146,60 @@ function DraftCreationPanel({
   const [dropOffError, setDropOffError] = useState("");
   const [isSearchingDropOffs, setIsSearchingDropOffs] = useState(false);
   const [selectedDropOffName, setSelectedDropOffName] = useState("");
+
+  // Слот-браузер: выбор конкретного слота вместо охотника
+  const [slotBrowseDraftId, setSlotBrowseDraftId] = useState<string | null>(null);
+  const [slots, setSlots] = useState<TimeslotOption[]>([]);
+  const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+  const [slotsError, setSlotsError] = useState<string | null>(null);
+  const [bookingSlot, setBookingSlot] = useState<TimeslotOption | null>(null);
+  const [bookingResult, setBookingResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [bookingDraftId, setBookingDraftId] = useState<string | null>(null);
+
+  const browseSlots = useCallback(async (draftId: string, candidate: DraftCandidate) => {
+    setSlotBrowseDraftId(draftId);
+    setSlots([]);
+    setSlotsError(null);
+    setBookingResult(null);
+    setIsLoadingSlots(true);
+    try {
+      const res = await fetch("/api/ozon/browse-timeslots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: clientId, api_key: apiKey, draft_id: draftId, candidate }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setSlots(data.slots || []);
+        if (!data.slots?.length) setSlotsError("Слотов на ближайшие 28 дней нет. Попробуйте запустить охотника — он забронирует как только появятся.");
+      } else {
+        setSlotsError(data.error || "Не удалось загрузить слоты");
+      }
+    } catch {
+      setSlotsError("Ошибка сети");
+    } finally {
+      setIsLoadingSlots(false);
+    }
+  }, [clientId, apiKey]);
+
+  const bookSlot = useCallback(async (slot: TimeslotOption, draftId: string, candidate: DraftCandidate) => {
+    setBookingSlot(slot);
+    setBookingDraftId(draftId);
+    setBookingResult(null);
+    try {
+      const res = await fetch("/api/ozon/book-timeslot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: clientId, api_key: apiKey, draft_id: draftId, slot, candidate }),
+      });
+      const data = await res.json();
+      setBookingResult({ ok: data.ok, message: data.ok ? "✓ Заявка успешно создана в Ozon" : data.error || "Ошибка бронирования" });
+    } catch {
+      setBookingResult({ ok: false, message: "Ошибка сети" });
+    } finally {
+      setBookingSlot(null);
+    }
+  }, [clientId, apiKey]);
 
   const createableCandidates = useMemo(
     () => candidates.filter((candidate) => candidate.can_create !== false),
@@ -2446,14 +2519,108 @@ function DraftCreationPanel({
           >
             <div className="font-medium">{status.message}</div>
             {status.type === "success" && (
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Button type="button" onClick={onOpenSlotHunter} className="gap-2">
-                  <Radar className="h-4 w-4" />
-                  Найти слот и создать заявку
-                </Button>
-                <span className="text-xs text-muted-foreground">
-                  Черновики готовы. Заявка появится в кабинете Ozon после брони слота.
-                </span>
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={onOpenSlotHunter}
+                    className="flex flex-col gap-1 rounded-lg border border-primary/40 bg-primary/10 p-4 text-left transition hover:bg-primary/15"
+                  >
+                    <div className="flex items-center gap-2 font-semibold">
+                      <Radar className="h-4 w-4 text-primary" />
+                      Охотник найдёт сам
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Мониторит слоты и бронирует автоматически как только появится. Удобно если нет срочности или слот пока недоступен.
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const firstReady = status.results.find((r) => r.ok && r.draft_id);
+                      if (firstReady?.draft_id) {
+                        const candidate = candidates.find((c) => c.warehouse === firstReady.warehouse);
+                        browseSlots(firstReady.draft_id, candidate ?? candidates[0]);
+                      }
+                    }}
+                    className="flex flex-col gap-1 rounded-lg border border-white/20 bg-white/[0.03] p-4 text-left transition hover:bg-white/[0.05]"
+                  >
+                    <div className="flex items-center gap-2 font-semibold">
+                      <CalendarCheck className="h-4 w-4" />
+                      Выбрать время сейчас
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Покажет доступные даты и время. Выберите удобный слот и сразу создайте заявку.
+                    </div>
+                  </button>
+                </div>
+
+                {/* Слот-браузер — показывается после нажатия "Выбрать время сейчас" */}
+                {slotBrowseDraftId && (
+                  <div className="space-y-3">
+                    <div className="text-sm font-medium">Доступные слоты</div>
+                    {isLoadingSlots && (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Загружаем слоты из Ozon...
+                      </div>
+                    )}
+                    {slotsError && !isLoadingSlots && (
+                      <div className="text-sm text-muted-foreground">{slotsError}</div>
+                    )}
+                    {!isLoadingSlots && slots.length > 0 && (
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {slots.slice(0, 30).map((slot, i) => {
+                          const draftResult = status.results.find((r) => r.ok && r.draft_id === slotBrowseDraftId);
+                          const candidate = candidates.find((c) => c.warehouse === draftResult?.warehouse) ?? candidates[0];
+                          const isBooking = bookingSlot === slot;
+                          const isBooked = bookingResult?.ok && bookingDraftId === slotBrowseDraftId;
+                          return (
+                            <button
+                              key={i}
+                              type="button"
+                              disabled={isBooking || Boolean(isBooked)}
+                              onClick={() => bookSlot({ ...slot, __request_variant: slots[0].__request_variant }, slotBrowseDraftId, candidate)}
+                              className="flex flex-col rounded-lg border border-white/15 p-3 text-left text-sm transition hover:border-primary/50 hover:bg-primary/10 disabled:opacity-50"
+                            >
+                              <div className="font-semibold">{slot.date}</div>
+                              <div className="text-xs text-muted-foreground">{slot.time_from} — {slot.time_to}</div>
+                              {isBooking && <div className="mt-1 text-xs text-primary">Бронируем...</div>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {bookingResult && (
+                      <div className={cn("rounded-lg p-3 text-sm", bookingResult.ok ? "bg-secondary/10 text-secondary" : "bg-destructive/10 text-destructive")}>
+                        {bookingResult.message}
+                      </div>
+                    )}
+                    {/* Несколько черновиков — переключатель */}
+                    {status.results.filter((r) => r.ok && r.draft_id).length > 1 && (
+                      <div className="flex flex-wrap gap-2">
+                        {status.results.filter((r) => r.ok && r.draft_id).map((r) => (
+                          <button
+                            key={r.draft_id}
+                            type="button"
+                            onClick={() => {
+                              const candidate = candidates.find((c) => c.warehouse === r.warehouse) ?? candidates[0];
+                              browseSlots(r.draft_id!, candidate);
+                            }}
+                            className={cn(
+                              "rounded-md border px-3 py-1 text-xs transition",
+                              slotBrowseDraftId === r.draft_id
+                                ? "border-primary/60 bg-primary/15 text-foreground"
+                                : "border-white/15 text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            {r.warehouse}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             {status.results.length > 0 && (
@@ -3003,14 +3170,16 @@ function SlotHunterView({
                         ) : target.status === "booked" ? (
                           <div className="text-green-400">Слот забронирован</div>
                         ) : target.status === "cooldown" ? (
-                          <div>Пауза из-за лимита Ozon, повторяем автоматически</div>
+                          <div>Пауза по лимиту Ozon — следующая попытка через{" "}
+                            <Countdown targetIso={target.next_attempt_at} />
+                          </div>
                         ) : target.status === "searching" ? (
                           <div>Ищем слот...</div>
                         ) : (
-                          <div>Ожидает попытки</div>
-                        )}
-                        {target.next_attempt_at && !["booked", "failed", "completed"].includes(target.status) && (
-                          <div>Следующая попытка: {formatDate(target.next_attempt_at)}</div>
+                          <div>
+                            Следующая попытка через{" "}
+                            <Countdown targetIso={target.next_attempt_at} />
+                          </div>
                         )}
                       </div>
                     </div>
@@ -3169,6 +3338,34 @@ function StepProgress({ current }: { current: 1 | 2 | 3 }) {
     </div>
   );
 }
+
+function Countdown({ targetIso }: { targetIso: string | null | undefined }) {
+  const [secs, setSecs] = useState<number | null>(null);
+  useEffect(() => {
+    if (!targetIso) { setSecs(null); return; }
+    const update = () => {
+      const diff = Math.max(0, Math.round((new Date(targetIso).getTime() - Date.now()) / 1000));
+      setSecs(diff);
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [targetIso]);
+  if (secs === null) return null;
+  if (secs === 0) return <span className="text-primary">прямо сейчас</span>;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return <span>{m > 0 ? `${m} мин ${s} сек` : `${s} сек`}</span>;
+}
+
+type TimeslotOption = {
+  date: string;
+  time_from: string;
+  time_to: string;
+  from_in_timezone: string;
+  to_in_timezone: string;
+  __request_variant?: Record<string, unknown>;
+};
 
 function MetricCard({
   icon: Icon,

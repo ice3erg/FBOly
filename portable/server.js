@@ -582,6 +582,55 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { ok: results.every((item) => item.ok), results });
     }
+    // Просмотр доступных слотов для конкретного черновика (для ручного выбора)
+    if (req.method === "POST" && requestUrl.pathname === "/api/ozon/browse-timeslots") {
+      const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+      const { client_id, api_key, draft_id, candidate } = body;
+      if (!client_id || !api_key || !draft_id) {
+        return json(res, 400, { detail: "Требуются client_id, api_key, draft_id" });
+      }
+      const client = new OzonClient(client_id, api_key);
+      const now = new Date();
+      const dateFrom = now.toISOString().slice(0, 10);
+      const dateTo = new Date(now.getTime() + 28 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      try {
+        const candidateObj = candidate || {};
+        const timeslotData = await client.getDraftTimeslots(draft_id, { date_from: dateFrom, date_to: dateTo }, candidateObj);
+        // Извлечь слоты из ответа в плоский массив для UI
+        const slots = extractTimeslotsFromResponse(timeslotData);
+        return json(res, 200, {
+          ok: true,
+          draft_id,
+          slots,
+          raw: timeslotData,
+          request_variant: timeslotData?.__request_variant || null,
+        });
+      } catch (error) {
+        return json(res, 200, {
+          ok: false,
+          error: error.message || "Не удалось загрузить слоты",
+          slots: [],
+        });
+      }
+    }
+
+    // Создать заявку по выбранному слоту (ручное бронирование)
+    if (req.method === "POST" && requestUrl.pathname === "/api/ozon/book-timeslot") {
+      const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+      const { client_id, api_key, draft_id, slot, candidate } = body;
+      if (!client_id || !api_key || !draft_id || !slot) {
+        return json(res, 400, { detail: "Требуются client_id, api_key, draft_id, slot" });
+      }
+      const client = new OzonClient(client_id, api_key);
+      try {
+        const candidateObj = { ...(candidate || {}), timeslot_request_variant: slot.__request_variant };
+        const result = await client.createSupplyFromDraft(draft_id, slot, {}, candidateObj);
+        return json(res, 200, { ok: true, result });
+      } catch (error) {
+        return json(res, 200, { ok: false, error: error.message || "Не удалось забронировать слот" });
+      }
+    }
+
     if (req.method === "POST" && requestUrl.pathname === "/api/ozon/draft-jobs") {
       const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
       const candidates = Array.isArray(body.candidates) ? body.candidates : [];
@@ -4362,6 +4411,26 @@ function extractSlotCandidates(data) {
   }
 
   visit(data);
+  return slots;
+}
+
+function extractTimeslotsFromResponse(data) {
+  const slots = [];
+  const requestVariant = data?.__request_variant || null;
+  collectDraftTimeslotCandidates(data, (slot, context) => {
+    const normalized = normalizeTimeslotForOzon({ ...context, ...slot });
+    if (normalized) {
+      slots.push({
+        ...normalized,
+        __request_variant: requestVariant,
+        date: (normalized.from_in_timezone || "").slice(0, 10),
+        time_from: (normalized.from_in_timezone || "").slice(11, 16),
+        time_to: (normalized.to_in_timezone || "").slice(11, 16),
+      });
+    }
+  });
+  // Сортировка по дате/времени
+  slots.sort((a, b) => (a.from_in_timezone || "").localeCompare(b.from_in_timezone || ""));
   return slots;
 }
 
