@@ -1307,12 +1307,6 @@ export default function Home() {
               isCreatingDrafts={isCreatingDrafts}
               clientId={clientId}
               apiKey={apiKey}
-              includeInternational={includeInternational}
-              onToggleInternational={setIncludeInternational}
-              includeRemote={includeRemote}
-              onToggleRemote={setIncludeRemote}
-              maxClusters={maxClusters}
-              onSetMaxClusters={setMaxClusters}
             />
           )}
           {activeView === "slotHunter" && (
@@ -1485,12 +1479,6 @@ function SupplyView({
   onOpenSlotHunter,
   clientId,
   apiKey,
-  includeInternational,
-  onToggleInternational,
-  includeRemote,
-  onToggleRemote,
-  maxClusters,
-  onSetMaxClusters,
 }: {
   stores: OzonStore[];
   activeStore: OzonStore | null;
@@ -1510,12 +1498,6 @@ function SupplyView({
   hasFullCredentials: boolean;
   clientId: string;
   apiKey: string;
-  includeInternational: boolean;
-  onToggleInternational: (v: boolean) => void;
-  includeRemote: boolean;
-  onToggleRemote: (v: boolean) => void;
-  maxClusters: number;
-  onSetMaxClusters: (v: number) => void;
   onSelectStore: (storeId: string) => void;
   onOpenProfile: () => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -1639,56 +1621,7 @@ function SupplyView({
             />
           </label>
 
-          <div className="space-y-3">
-              <div className="text-sm font-medium text-muted-foreground">Настройки распределения</div>
-              <div className="space-y-2">
-                <div className="text-xs text-muted-foreground">Количество кластеров</div>
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    { label: "8", value: 8 },
-                    { label: "10", value: 10 },
-                    { label: "14", value: 14 },
-                    { label: "Все", value: 0 },
-                  ].map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => onSetMaxClusters(opt.value)}
-                      className={cn(
-                        "rounded-md border px-3 py-1 text-sm transition",
-                        maxClusters === opt.value
-                          ? "border-primary/60 bg-primary/15 text-foreground"
-                          : "border-white/15 text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-                  <input
-                    type="checkbox"
-                    checked={includeRemote}
-                    onChange={(e) => onToggleRemote(e.target.checked)}
-                    className="h-4 w-4 rounded border-white/20 accent-primary"
-                  />
-                  Включая Дальний Восток
-                </label>
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-                  <input
-                    type="checkbox"
-                    checked={includeInternational}
-                    onChange={(e) => onToggleInternational(e.target.checked)}
-                    className="h-4 w-4 rounded border-white/20 accent-primary"
-                  />
-                  Включая другие страны (Казахстан, Беларусь, Армения)
-                </label>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <Button
                 type="button"
                 variant="ghost"
@@ -2263,6 +2196,9 @@ function DraftCreationPanel({
   }, [selectedWarehouses, createableCandidates]);
 
   const [supplyMode, setSupplyMode] = useState<"direct" | "crossdock">("direct");
+  // Настройки охвата (на шаге 2, после распределения)
+  const [showRemote, setShowRemote] = useState(false);
+  const [showInternational, setShowInternational] = useState(false);
   const [dropOffPointWarehouseId, setDropOffPointWarehouseId] = useState("");
   const [dropOffPointWarehouseType, setDropOffPointWarehouseType] = useState("");
   const [dropOffSearch, setDropOffSearch] = useState("");
@@ -2356,6 +2292,26 @@ function DraftCreationPanel({
     setSelectedWarehouses([]);
   }
 
+  // Определяем типы кластеров для фильтров
+  const isRemote = (name: string) => /дальн.*вост|дв\b/i.test(name);
+  const isIntl = (name: string) => /беларус|алмат|астан|ереван|армени/i.test(name);
+
+  // Видимые кластеры с учётом тогглов СНГ/ДВ
+  const visibleCandidates = createableCandidates.filter((c) => {
+    if (isRemote(c.warehouse) && !showRemote) return false;
+    if (isIntl(c.warehouse) && !showInternational) return false;
+    return true;
+  });
+
+  // Пресеты — топ-N по количеству среди видимых
+  function applyPreset(n: number) {
+    const sorted = [...visibleCandidates].sort((a, b) =>
+      (b.total_quantity || 0) - (a.total_quantity || 0)
+    );
+    const top = n === 0 ? sorted : sorted.slice(0, n);
+    setSelectedWarehouses(top.map((c) => c.warehouse));
+  }
+
   function selectDropOffPoint(point: CrossdockPoint) {
     setDropOffPointWarehouseId(point.id);
     setDropOffPointWarehouseType(String(point.warehouse_type || ""));
@@ -2399,39 +2355,50 @@ function DraftCreationPanel({
             Выберите кластеры и способ отгрузки. Заявка появится в кабинете Ozon после того, как охотник найдёт и забронирует слот.
           </CardDescription>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={selectAllWarehouses}
-            disabled={isCreating || !createableCandidates.length}
-          >
-            Выбрать все
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={clearAllWarehouses}
-            disabled={isCreating || !selectedWarehouses.length}
-          >
-            Снять все
-          </Button>
-          <Button
-            type="button"
-            onClick={() => onCreate(candidatesForCreate)}
-            disabled={!canCreateDrafts}
-            className="gap-2"
-          >
-            {isCreating ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Cloud className="h-4 w-4" />
-            )}
-            Подготовить
-          </Button>
+        <div className="space-y-3">
+          {/* Пресеты */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">Охват:</span>
+            {[
+              { label: "Топ‑6", n: 6 },
+              { label: "Топ‑10", n: 10 },
+              { label: "Топ‑14", n: 14 },
+              { label: "Все", n: 0 },
+            ].map((p) => (
+              <button
+                key={p.n}
+                type="button"
+                onClick={() => applyPreset(p.n)}
+                disabled={isCreating || isRedistributing}
+                className="rounded-md border border-white/15 px-3 py-1 text-xs transition hover:border-primary/50 hover:text-foreground disabled:opacity-40 text-muted-foreground"
+              >
+                {p.label}
+              </button>
+            ))}
+            <div className="ml-auto flex items-center gap-3">
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                <input
+                  type="checkbox"
+                  checked={showRemote}
+                  onChange={(e) => setShowRemote(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-primary"
+                />
+                Дальний Восток
+              </label>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                <input
+                  type="checkbox"
+                  checked={showInternational}
+                  onChange={(e) => setShowInternational(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-primary"
+                />
+                СНГ
+              </label>
+            </div>
+          </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+        </CardHeader>
+        <CardContent className="space-y-4">
         <div className="rounded-lg border border-white/[0.08] bg-white/[0.035] p-4">
           <div className="mb-3 text-sm font-medium">Способ поставки</div>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -2558,66 +2525,83 @@ function DraftCreationPanel({
         </div>
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {candidates.map((draft) => {
+          {visibleCandidates.map((draft) => {
             const disabled = draft.can_create === false;
             const checked = selectedWarehouses.includes(draft.warehouse);
+            const maxQty = Math.max(...visibleCandidates.map((c) => c.total_quantity || 0), 1);
+            const barPct = Math.round(((draft.total_quantity || 0) / maxQty) * 100);
             return (
               <label
                 key={draft.warehouse}
                 className={cn(
-                  "block rounded-lg border p-4 transition",
+                  "block rounded-lg border p-4 transition select-none",
                   disabled
-                    ? "cursor-not-allowed bg-muted/35 opacity-65"
-                    : "cursor-pointer hover:bg-muted/35",
-                  checked && !disabled && "border-primary bg-primary/10",
+                    ? "cursor-not-allowed bg-muted/35 opacity-50"
+                    : "cursor-pointer hover:bg-white/[0.03]",
+                  checked && !disabled && "border-primary/50 bg-primary/[0.07]",
                 )}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={disabled || isCreating || isRedistributing}
-                      onChange={() => toggleWarehouseWithRedistribute(draft.warehouse)}
-                      className="mt-1 h-4 w-4 rounded border-input"
-                    />
-                    <div className="min-w-0">
-                      <div className="truncate font-medium">{draft.warehouse}</div>
-                      <div className="mt-1 text-sm text-muted-foreground">
-                        {draft.rows_count} SKU, {isRedistributing ? (
-                          <span className="inline-flex items-center gap-1">
-                            <Loader2 className="h-3 w-3 animate-spin" /> пересчёт...
-                          </span>
-                        ) : (
-                          <span>{draft.total_quantity} шт.</span>
-                        )}
-                      </div>
-                      {draft.draft_id && (
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          API-черновик: {draft.draft_id}
-                        </div>
+                <div className="flex min-w-0 items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={disabled || isCreating || isRedistributing}
+                    onChange={() => toggleWarehouseWithRedistribute(draft.warehouse)}
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-input"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium">{draft.warehouse}</div>
+                    <div className="mt-0.5 text-sm text-muted-foreground">
+                      {draft.rows_count} SKU ·{" "}
+                      {isRedistributing ? (
+                        <span className="inline-flex items-center gap-1">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          пересчёт
+                        </span>
+                      ) : (
+                        <span className="font-medium text-foreground">
+                          {draft.total_quantity} шт.
+                        </span>
                       )}
                     </div>
+                    {checked && !disabled && !isRedistributing && (
+                      <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-white/[0.08]">
+                        <div
+                          className="h-full rounded-full bg-primary/50 transition-all duration-300"
+                          style={{ width: `${barPct}%` }}
+                        />
+                      </div>
+                    )}
+                    {disabled && draft.reason && (
+                      <div className="mt-1 text-xs text-muted-foreground">{draft.reason}</div>
+                    )}
                   </div>
-                  <Badge variant={disabled ? "outline" : "secondary"}>
-                    {disabled ? "нет ID" : "готов"}
-                  </Badge>
                 </div>
-                {draft.reason && (
-                  <div className="mt-3 text-xs text-muted-foreground">
-                    {draft.reason}
-                  </div>
-                )}
               </label>
             );
           })}
         </div>
 
-          <div className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-            Выбрано: {selectedCandidates.length} городов, {selectedQuantity} шт.
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm text-muted-foreground">
+            Выбрано{" "}
+            <span className="font-medium text-foreground">{selectedCandidates.length}</span>{" "}
+            {selectedCandidates.length === 1 ? "город" : "городов"},{" "}
+            <span className="font-medium text-foreground">{selectedQuantity}</span> шт.
           </div>
-        <div className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-          После создания черновиков FBOly передаст выбранные кластеры в охотник на слоты. Там можно запустить поиск окна поставки и автоматическую бронь.
+          <Button
+            type="button"
+            onClick={() => onCreate(candidatesForCreate)}
+            disabled={!canCreateDrafts}
+            className="gap-2"
+          >
+            {isCreating ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Cloud className="h-4 w-4" />
+            )}
+            Подготовить
+          </Button>
         </div>
 
         {status && (
