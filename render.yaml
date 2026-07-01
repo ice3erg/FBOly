@@ -1,3 +1,9 @@
+databases:
+  - name: fboly-db
+    plan: free
+    databaseName: fboly
+    user: fboly
+
 services:
   - type: web
     name: fboly
@@ -10,3 +16,23 @@ services:
         value: 20
       - key: NPM_CONFIG_YES
         value: "true"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fboly-db
+          property: connectionString
+      # Секрет для подписи сессионных cookie — сгенерируйте случайную
+      # строку (например: openssl rand -hex 32) и задайте вручную в
+      # Render → Environment. sync: false, чтобы значение не попало в git.
+      - key: SESSION_SECRET
+        sync: false
+      # Публичный URL сервиса — нужен для return_url ЮKassa после оплаты.
+      - key: PUBLIC_APP_URL
+        value: https://fboly.onrender.com
+      # Ключи ЮKassa (Личный кабинет → Настройки → Магазины → API).
+      # sync: false — заполняются вручную в Render, не хранятся в репо.
+      - key: YOOKASSA_SHOP_ID
+        sync: false
+      - key: YOOKASSA_SECRET_KEY
+        sync: false

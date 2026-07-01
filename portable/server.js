@@ -2,6 +2,9 @@ const http = require("node:http");
 const zlib = require("node:zlib");
 const fs = require("node:fs");
 const path = require("node:path");
+const db = require("./db");
+const auth = require("./auth");
+const billing = require("./billing");
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
@@ -840,6 +843,90 @@ const server = http.createServer(async (req, res) => {
         distribution_note: distributionPlan.note,
       });
     }
+    // ── Аккаунты ────────────────────────────────────────────────────────
+    if (req.method === "POST" && requestUrl.pathname === "/api/auth/register") {
+      const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+      const email = String(body.email || "").trim().toLowerCase();
+      const password = String(body.password || "");
+      const name = String(body.name || "").trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return json(res, 400, { detail: "Некорректный email" }, requestOrigin);
+      }
+      if (password.length < 6) {
+        return json(res, 400, { detail: "Пароль должен быть не короче 6 символов" }, requestOrigin);
+      }
+      const existing = await db.query(`SELECT id FROM users WHERE email = $1`, [email]);
+      if (existing.rows.length) {
+        return json(res, 409, { detail: "Пользователь с таким email уже зарегистрирован" }, requestOrigin);
+      }
+      const passwordHash = auth.hashPassword(password);
+      const inserted = await db.query(
+        `INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING *`,
+        [email, passwordHash, name],
+      );
+      const user = inserted.rows[0];
+      const token = await auth.createSession(user.id);
+      return json(res, 200, { user: auth.publicUser(user) }, requestOrigin, {
+        "Set-Cookie": auth.sessionCookieHeader(token),
+      });
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/auth/login") {
+      const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+      const email = String(body.email || "").trim().toLowerCase();
+      const password = String(body.password || "");
+      const found = await db.query(`SELECT * FROM users WHERE email = $1`, [email]);
+      const user = found.rows[0];
+      // Намеренно один и тот же текст ошибки и для "нет такого email", и
+      // для "неверный пароль" — чтобы не подтверждать существование адреса.
+      if (!user || !auth.verifyPassword(password, user.password_hash)) {
+        return json(res, 401, { detail: "Неверный email или пароль" }, requestOrigin);
+      }
+      const token = await auth.createSession(user.id);
+      return json(res, 200, { user: auth.publicUser(user) }, requestOrigin, {
+        "Set-Cookie": auth.sessionCookieHeader(token),
+      });
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/auth/logout") {
+      await auth.destroySessionFromCookie(req);
+      return json(res, 200, { ok: true }, requestOrigin, { "Set-Cookie": auth.clearCookieHeader() });
+    }
+
+    if (req.method === "GET" && requestUrl.pathname === "/api/auth/me") {
+      const user = await auth.getUserFromCookie(req);
+      if (!user) return json(res, 401, { detail: "Не авторизован" }, requestOrigin);
+      return json(res, 200, { user: auth.publicUser(user) }, requestOrigin);
+    }
+
+    // ── Оплата (ЮKassa) ────────────────────────────────────────────────
+    if (req.method === "POST" && requestUrl.pathname === "/api/billing/checkout") {
+      const user = await auth.getUserFromCookie(req);
+      if (!user) return json(res, 401, { detail: "Не авторизован" }, requestOrigin);
+      const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+      const plan = String(body.plan || "");
+      const result = await billing.createPayment({ userId: user.id, userEmail: user.email, plan });
+      return json(res, 200, result, requestOrigin);
+    }
+
+    if (req.method === "POST" && requestUrl.pathname === "/api/billing/webhook") {
+      // Публичный эндпоинт — сюда стучится сама ЮKassa. Не требует
+      // авторизации по определению, но тело не считается источником
+      // истины (см. комментарий в billing.js) — статус всегда
+      // перепроверяется напрямую через API ЮKassa.
+      let result;
+      try {
+        const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+        result = await billing.handleWebhookNotification(body);
+      } catch (error) {
+        console.error("[billing] webhook handling failed:", error);
+        result = { ok: false };
+      }
+      // ЮKassa ждёт 200, иначе будет ретраить уведомление — отвечаем 200
+      // даже при внутренней ошибке разбора, чтобы не заваливать очередь.
+      return json(res, 200, result, requestOrigin);
+    }
+
     if (req.method === "GET" && !requestUrl.pathname.startsWith("/api/")) {
       if (serveFrontendAsset(res, requestUrl.pathname)) return;
     }
@@ -848,6 +935,13 @@ const server = http.createServer(async (req, res) => {
     // Тело запроса превысило лимит — отдельный статус.
     if (error && error.statusCode === 413) {
       return json(res, 413, { detail: "Файл или запрос слишком большой" }, requestOrigin);
+    }
+    // Ожидаемые ошибки из db.js/auth.js/billing.js (БД не настроена,
+    // ЮKassa не настроена/отклонила запрос и т.п.) уже несут понятный
+    // русский текст и корректный statusCode — прокидываем как есть,
+    // не подменяя обобщённым "Внутренняя ошибка сервера".
+    if (error && Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 600) {
+      return json(res, error.statusCode, { detail: error.message || "Ошибка" }, requestOrigin);
     }
     // Логируем полную ошибку на сервере, но клиенту отдаём обобщённое
     // сообщение, чтобы не утекали стек-трейсы, пути и детали окружения.
@@ -864,9 +958,15 @@ server.on("error", (error) => {
   process.exit(1);
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Ozon FBO Excel portable service listening on 0.0.0.0:${PORT}`);
-});
+db.migrate()
+  .catch((error) => {
+    console.error("[db] migration failed — accounts/billing endpoints may not work until this is fixed:", error.message);
+  })
+  .finally(() => {
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`Ozon FBO Excel portable service listening on 0.0.0.0:${PORT}`);
+    });
+  });
 
 function serveFrontendAsset(res, requestPathname) {
   if (!fs.existsSync(FRONTEND_DIST_DIR)) return false;
@@ -937,13 +1037,14 @@ function buildResponseHeaders(baseHeaders, requestOrigin) {
     headers["Vary"] = "Origin";
     headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
     headers["Access-Control-Allow-Headers"] = "Content-Type, X-Debug-Token";
+    headers["Access-Control-Allow-Credentials"] = "true";
     headers["Access-Control-Max-Age"] = "600";
   }
   return headers;
 }
 
-function send(res, status, body, contentType, requestOrigin) {
-  res.writeHead(status, buildResponseHeaders({ "Content-Type": contentType }, requestOrigin));
+function send(res, status, body, contentType, requestOrigin, extraHeaders) {
+  res.writeHead(status, buildResponseHeaders({ "Content-Type": contentType, ...extraHeaders }, requestOrigin));
   res.end(body);
 }
 
@@ -961,8 +1062,8 @@ function sendDownload(res, status, body, contentType, filename, requestOrigin) {
   res.end(body);
 }
 
-function json(res, status, payload, requestOrigin) {
-  send(res, status, JSON.stringify(payload), "application/json; charset=utf-8", requestOrigin);
+function json(res, status, payload, requestOrigin, extraHeaders) {
+  send(res, status, JSON.stringify(payload), "application/json; charset=utf-8", requestOrigin, extraHeaders);
 }
 
 function readBody(req, maxBytes = MAX_REQUEST_BODY_BYTES) {

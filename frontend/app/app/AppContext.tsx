@@ -16,6 +16,8 @@ export type AppUser = {
   name: string;
   email: string;
   organization: string;
+  plan?: "start" | "pro" | "team";
+  planActiveUntil?: string | null;
 };
 
 export type OzonStore = {
@@ -193,6 +195,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     setReady(true);
 
+    // Локальный кэш (выше) — только для мгновенной отрисовки без "мигания"
+    // экрана логина. Источник истины — httpOnly cookie на сервере: сверяем
+    // с /api/auth/me и, если сессия невалидна/истекла, выкидываем на /auth.
+    // Если бэкенд без БД (аккаунты выключены — YOOKASSA/DATABASE_URL не
+    // настроены), /api/auth/me ответит 503 — тогда просто остаёмся на
+    // локальном кэше, не разлогиниваем пользователя из-за конфигурации сервера.
+    fetch(`${API_URL}/api/auth/me`, { credentials: "include" })
+      .then(async (response) => {
+        if (response.status === 401) {
+          window.localStorage.removeItem(AUTH_STORAGE_KEY);
+          window.localStorage.removeItem(FBOLY_AUTH_SESSION_KEY);
+          router.replace("/auth");
+          return;
+        }
+        if (!response.ok) return; // 503 и подобное — сервер временно не проверяет сессии, не трогаем локальный кэш
+        const payload = await response.json();
+        if (!payload?.user) return;
+        const nextUser: AppUser = {
+          name: payload.user.name || payload.user.email?.split("@")[0] || "Пользователь",
+          email: payload.user.email || "",
+          organization: user.organization || "Мой магазин Ozon",
+          plan: payload.user.plan,
+          planActiveUntil: payload.user.plan_active_until,
+        };
+        setUserState(nextUser);
+        window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextUser));
+      })
+      .catch(() => {
+        // Сеть недоступна — работаем с тем, что уже есть в localStorage.
+      });
+
     // Результат последней обработки Excel — переживает обновление страницы
     // и прямой заход на /app/slots, минуя /app/supply (раньше терялся,
     // так как жил только в памяти React).
@@ -229,6 +262,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     window.localStorage.removeItem(AUTH_STORAGE_KEY);
     window.localStorage.removeItem(FBOLY_AUTH_SESSION_KEY);
+    fetch(`${API_URL}/api/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {
+      // Даже если запрос не дошёл — локальная сессия уже очищена, просто
+      // серверная cookie доживёт до истечения TTL (30 дней) сама по себе.
+    });
     router.push("/auth");
   }, [router]);
 

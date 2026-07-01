@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useApp, type OzonStore } from "../AppContext";
+import { API_URL } from "@/lib/api";
 import styles from "./profile.module.css";
 
 function initialsOf(name: string) {
@@ -42,6 +43,28 @@ export default function ProfilePage() {
   const [toast, setToast] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [notifs, setNotifs] = useState({ slotFound: true, draftCreated: true, apiError: true, digest: false });
+  const [checkoutLoadingPlan, setCheckoutLoadingPlan] = useState<string | null>(null);
+
+  const currentPlan = user.plan ?? "start";
+
+  async function handleChangePlan(plan: "pro" | "team") {
+    setCheckoutLoadingPlan(plan);
+    try {
+      const response = await fetch(`${API_URL}/api/billing/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ plan }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Не удалось создать платёж");
+      if (!payload.confirmationUrl) throw new Error("ЮKassa не вернула ссылку на оплату");
+      window.location.href = payload.confirmationUrl;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Не удалось перейти к оплате");
+      setCheckoutLoadingPlan(null);
+    }
+  }
 
   useEffect(() => {
     setStoreName(activeStore?.title ?? "");
@@ -52,6 +75,43 @@ export default function ProfilePage() {
     const t = setTimeout(() => setToast(null), 2600);
     return () => clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("billing") !== "success") return;
+    // Убираем параметр из адресной строки, чтобы повторный рефреш страницы
+    // не запускал опрос заново.
+    window.history.replaceState({}, "", window.location.pathname);
+    setToast("Платёж обрабатывается — обновляем тариф…");
+
+    let cancelled = false;
+    let attempt = 0;
+    const poll = async () => {
+      attempt += 1;
+      try {
+        const response = await fetch(`${API_URL}/api/auth/me`, { credentials: "include" });
+        if (response.ok) {
+          const payload = await response.json();
+          if (payload?.user && !cancelled) {
+            setUser({ ...user, name: payload.user.name || user.name, email: payload.user.email || user.email, plan: payload.user.plan, planActiveUntil: payload.user.plan_active_until });
+            if (payload.user.plan !== "start") {
+              setToast("Тариф обновлён");
+              return;
+            }
+          }
+        }
+      } catch {
+        // сеть недоступна — попробуем ещё раз ниже, если остались попытки
+      }
+      if (!cancelled && attempt < 6) window.setTimeout(poll, 2000);
+    };
+    poll();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function markDirty() {
     setDirty(true);
@@ -125,7 +185,7 @@ export default function ProfilePage() {
             <div>
               <div className={styles.profileName}>{user.name || "Без имени"}</div>
               <div className={styles.profileEmail}>{user.email}</div>
-              <div className={styles.planPill}><div className="dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--success)" }} /><span>Pro план активен</span></div>
+              <div className={styles.planPill}><div className="dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--success)" }} /><span>{currentPlan === "pro" ? "Pro план активен" : currentPlan === "team" ? "план Команда активен" : "Старт (бесплатно)"}</span></div>
             </div>
           </div>
           <div className={styles.fieldGrid}>
@@ -247,37 +307,64 @@ export default function ProfilePage() {
           )}
         </div>
 
-        {/* Plan — визуально из макета; реальной оплаты/биллинга в бэкенде нет */}
+        {/* Plan — реальные данные пользователя + оплата через ЮKassa */}
         <div className={styles.card}>
           <div className={styles.sectionTitle}>Тариф</div>
           <div className={styles.plansGrid} role="radiogroup" aria-label="Тарифный план">
-            <div className={`${styles.planCard} ${styles.planCardDim}`}>
+            <div className={`${styles.planCard} ${currentPlan === "start" ? styles.planCardCurrent : styles.planCardDim}`}>
+              {currentPlan === "start" && <div className={styles.planCurrentTag}>Текущий</div>}
               <div className={styles.planName}>Старт</div>
               <div className={styles.planPrice}>0 ₽</div>
               <div className={styles.planFoot}>5 поставок / мес</div>
             </div>
-            <div className={`${styles.planCard} ${styles.planCardCurrent}`}>
-              <div className={styles.planCurrentTag}>Текущий</div>
+            <div className={`${styles.planCard} ${currentPlan === "pro" ? styles.planCardCurrent : ""}`}>
+              {currentPlan === "pro" && <div className={styles.planCurrentTag}>Текущий</div>}
               <div className={styles.planName}>Pro</div>
               <div className={styles.planPrice}>1 990 ₽</div>
               <div className={styles.planFoot}>Безлимит · приоритет слотов</div>
+              {currentPlan !== "pro" && (
+                <button
+                  className={styles.btnGhost}
+                  style={{ height: 30, padding: "0 12px", fontSize: 12, marginTop: 10 }}
+                  onClick={() => handleChangePlan("pro")}
+                  disabled={checkoutLoadingPlan !== null}
+                >
+                  {checkoutLoadingPlan === "pro" ? "Переходим к оплате…" : "Выбрать Pro"}
+                </button>
+              )}
             </div>
-            <div className={styles.planCard}>
+            <div className={`${styles.planCard} ${currentPlan === "team" ? styles.planCardCurrent : ""}`}>
+              {currentPlan === "team" && <div className={styles.planCurrentTag}>Текущий</div>}
               <div className={styles.planName}>Команда</div>
               <div className={styles.planPrice}>4 990 ₽</div>
               <div className={styles.planFoot}>До 5 пользователей</div>
+              {currentPlan !== "team" && (
+                <button
+                  className={styles.btnGhost}
+                  style={{ height: 30, padding: "0 12px", fontSize: 12, marginTop: 10 }}
+                  onClick={() => handleChangePlan("team")}
+                  disabled={checkoutLoadingPlan !== null}
+                >
+                  {checkoutLoadingPlan === "team" ? "Переходим к оплате…" : "Выбрать Команда"}
+                </button>
+              )}
             </div>
           </div>
           <div className={styles.billingRow}>
             <div>
-              <div className={styles.billingTitle}>Следующее списание</div>
-              <div className={styles.billingDate}>15 июля 2026 · 1 990 ₽</div>
-            </div>
-            <div className={styles.billingActions}>
-              <button className={styles.btnGhost} style={{ height: 32, padding: "0 12px", fontSize: 12 }} onClick={() => setToast("Смена тарифа скоро появится")}>Сменить тариф</button>
+              <div className={styles.billingTitle}>{currentPlan === "start" ? "Активной подписки нет" : "Подписка активна до"}</div>
+              <div className={styles.billingDate}>
+                {currentPlan === "start"
+                  ? "Оплатите Pro или Команда, чтобы снять лимиты"
+                  : user.planActiveUntil
+                    ? new Date(user.planActiveUntil).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })
+                    : "—"}
+              </div>
             </div>
           </div>
-          <div className={styles.planNote}>Оплата и смена тарифа пока не подключены — раздел информационный.</div>
+          <div className={styles.planNote}>
+            Продление пока не автоматическое — по окончании периода оплатите тариф заново на этой странице. Оплата — через ЮKassa, картой любого банка РФ.
+          </div>
         </div>
 
         {/* Notifications — локальные предпочтения, без синхронизации с сервером */}

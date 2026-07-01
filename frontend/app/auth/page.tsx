@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { API_URL } from "@/lib/api";
 import styles from "./auth.module.css";
 
 const AUTH_STORAGE_KEY = "fboly-auth-session";
@@ -112,23 +113,29 @@ export default function AuthPage() {
     setErrors({});
     setLoading(true);
 
-    // Точка интеграции с бэкендом: POST /api/auth/login или /api/auth/register.
-    // Пока бэкенд их не реализует — мок-сессия в localStorage, как и было.
-    await new Promise((r) => setTimeout(r, 600));
-
     try {
-      localStorage.setItem(
-        AUTH_STORAGE_KEY,
-        JSON.stringify({
-          email: email.trim(),
-          name: name.trim() || email.split("@")[0],
-          shop: shop.trim() || null,
-          createdAt: new Date().toISOString(),
-        }),
-      );
+      const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/register";
+      const response = await fetch(`${API_URL}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(
+          mode === "login"
+            ? { email: email.trim(), password }
+            : { email: email.trim(), password, name: name.trim() },
+        ),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "Не удалось войти. Попробуйте ещё раз.");
+      }
+      // Сессия теперь живёт в httpOnly cookie (сервер сам её выставил в
+      // ответе) — здесь кэшируем только отображаемые данные пользователя
+      // для мгновенной отрисовки профиля без похода на /api/auth/me.
+      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(payload.user));
       router.push("/app/supply");
-    } catch {
-      setGlobalError("Не удалось сохранить сессию. Попробуйте ещё раз.");
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : "Не удалось войти. Попробуйте ещё раз.");
       setLoading(false);
     }
   }
