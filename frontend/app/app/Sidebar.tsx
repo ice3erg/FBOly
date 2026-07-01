@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import styles from "./shell.module.css";
 import { useApp } from "./AppContext";
+import { BrandMark } from "../BrandMark";
 
 const NAV_ITEMS = [
   {
@@ -64,15 +65,7 @@ export function Sidebar() {
       <div className={styles.sidebarRailSpace} aria-hidden="true" />
       <aside className={styles.sidebar}>
         <Link className={styles.sidebarLogo} href="/" aria-label="FBOly — на главную">
-          <div className={styles.logoMark}>
-            <svg className={styles.logoMarkSvg} viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-              <polygon points="5,3 19,3 15,8 5,8" />
-              <polygon points="5,11 16,11 12,15 9,15 9,21 5,21" />
-            </svg>
-          </div>
-          <span className={styles.logoImg} aria-hidden="true">
-            FBO<span style={{ color: "var(--accent-light)" }}>ly</span>
-          </span>
+          <BrandMark size={24} />
         </Link>
 
         <nav className={styles.sidebarNav}>
