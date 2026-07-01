@@ -94,6 +94,14 @@
 .clusterTagUnselected { background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); color: var(--text-muted); }
 .clusterTagError { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: var(--error); }
 
+/* Мини-переключатель режима "Прямая / Кроссдок" внутри строки кластера */
+.clusterModeToggle { display: flex; gap: 2px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border); border-radius: 8px; padding: 2px; flex-shrink: 0; }
+.clusterModeBtn { height: 26px; padding: 0 10px; border: none; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 11px; font-weight: 600; font-family: var(--font-ui); cursor: pointer; transition: background 140ms, color 140ms; white-space: nowrap; }
+.clusterModeBtn:hover { color: var(--text-sec); }
+.clusterModeBtnActive { background: var(--accent); color: #fff; }
+.clusterModeBtnActive:hover { color: #fff; }
+.clusterModeBtnActiveCrossdock { background: #A855F7; color: #fff; }
+
 /* Crossdock — упрощено до поиска+списка (без литеральной SVG-карты: у точек нет реальных гео-координат) */
 .crossdockSearch { position: relative; margin-bottom: 10px; max-width: 420px; }
 .crossdockSearch input {

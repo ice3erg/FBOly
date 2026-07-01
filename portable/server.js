@@ -9,6 +9,30 @@ const APP_VERSION = "2026-06-28-cluster-count-toggle-redistribute";
 const OZON_ALLOW_LEGACY_DRAFT_API = process.env.OZON_ALLOW_LEGACY_DRAFT_API === "1";
 const OZON_FBO_DRAFT_FLOW = process.env.OZON_FBO_DRAFT_FLOW || "direct";
 const FRONTEND_DIST_DIR = path.resolve(__dirname, "..", "frontend", "out");
+
+// ── Security limits ──────────────────────────────────────────────────────
+// Максимальный размер тела запроса. Загружаемый Excel редко превышает
+// несколько мегабайт; ставим потолок, чтобы одиночный запрос не мог
+// исчерпать память процесса (DoS).
+const MAX_REQUEST_BODY_BYTES = Number(process.env.MAX_REQUEST_BODY_BYTES || 15 * 1024 * 1024); // 15 MB
+// Потолок распаковки одного вложения внутри XLSX (защита от zip-бомбы).
+const MAX_UNZIP_ENTRY_BYTES = Number(process.env.MAX_UNZIP_ENTRY_BYTES || 60 * 1024 * 1024); // 60 MB
+// Суммарный потолок распаковки на весь архив.
+const MAX_UNZIP_TOTAL_BYTES = Number(process.env.MAX_UNZIP_TOTAL_BYTES || 120 * 1024 * 1024); // 120 MB
+// Разрешённые Origin для CORS. По умолчанию — same-origin (пустой список =
+// заголовок не подставляется, браузер применяет same-origin policy).
+// Задаётся через CORS_ALLOWED_ORIGINS="https://app.example.com,https://foo.bar".
+const CORS_ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+// Секрет для доступа к диагностическому журналу запросов Ozon. Если не задан —
+// эндпоинт /api/ozon/request-log отключён (404), чтобы не раскрывать активность
+// других арендаторов. Передаётся заголовком X-Debug-Token.
+const REQUEST_LOG_DEBUG_TOKEN = process.env.REQUEST_LOG_DEBUG_TOKEN || "";
+// Показывать ли внутренние сообщения об ошибках в HTTP-ответах. По умолчанию
+// выключено, чтобы не утекали стек-трейсы и детали окружения.
+const EXPOSE_INTERNAL_ERRORS = process.env.EXPOSE_INTERNAL_ERRORS === "1";
 const STATIC_MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -129,6 +153,7 @@ function html() {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" />
   <title>Ozon FBO Excel</title>
   <style>
     :root { color-scheme: light; --blue:#2563eb; --green:#0f766e; --red:#dc2626; --border:#d7dee8; --muted:#657386; --bg:#f7fafc; }
@@ -368,8 +393,8 @@ function html() {
         const disabled = candidate.can_create ? "" : "disabled";
         const checked = candidate.can_create ? "checked" : "";
         const note = candidate.can_create
-          ? "кластер Ozon: " + candidate.cluster_ids.join(", ")
-          : (candidate.reason || "нет cluster_id для создания черновика");
+          ? "кластер Ozon: " + escapeHtml(Array.isArray(candidate.cluster_ids) ? candidate.cluster_ids.join(", ") : String(candidate.cluster_ids || ""))
+          : escapeHtml(candidate.reason || "нет cluster_id для создания черновика");
         return \`
           <label class="file" style="display:block;">
             <input class="draftCandidate" type="checkbox" value="\${index}" \${checked} \${disabled} />
@@ -461,19 +486,30 @@ function html() {
 }
 
 const server = http.createServer(async (req, res) => {
+  const requestOrigin = req.headers.origin || "";
   try {
     const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     if (req.method === "OPTIONS") {
-      return send(res, 204, "", "text/plain; charset=utf-8");
+      // Preflight: заголовки CORS выставит buildResponseHeaders только для
+      // разрешённых Origin. Для остальных вернётся голый 204 (браузер
+      // заблокирует кросс-доменный запрос сам).
+      return send(res, 204, "", "text/plain; charset=utf-8", requestOrigin);
     }
     if (req.method === "GET" && requestUrl.pathname === "/") {
       if (serveFrontendAsset(res, requestUrl.pathname)) return;
-      return send(res, 200, html(), "text/html; charset=utf-8");
+      return send(res, 200, html(), "text/html; charset=utf-8", requestOrigin);
     }
     if (req.method === "GET" && req.url === "/health") {
-      return json(res, 200, { status: "ok", mode: "portable", version: APP_VERSION });
+      return json(res, 200, { status: "ok", mode: "portable", version: APP_VERSION }, requestOrigin);
     }
     if (req.method === "GET" && requestUrl.pathname === "/api/ozon/request-log") {
+      // Диагностический журнал раскрывает активность API по client_id.
+      // Чтобы не допустить межарендаторного раскрытия (IDOR), эндпоинт
+      // доступен только при заданном REQUEST_LOG_DEBUG_TOKEN и совпадении
+      // заголовка X-Debug-Token. Иначе — 404 (не выдаём сам факт наличия).
+      if (!REQUEST_LOG_DEBUG_TOKEN || req.headers["x-debug-token"] !== REQUEST_LOG_DEBUG_TOKEN) {
+        return send(res, 404, "Not found", "text/plain; charset=utf-8", requestOrigin);
+      }
       const clientId = requestUrl.searchParams.get("client_id") || "";
       const seconds = Number(requestUrl.searchParams.get("seconds") || 120);
       return json(res, 200, {
@@ -483,7 +519,7 @@ const server = http.createServer(async (req, res) => {
           windowMs: Math.max(1, Math.min(600, seconds)) * 1000,
           limit: 120,
         }),
-      });
+      }, requestOrigin);
     }
     if (req.method === "GET" && req.url === "/api/templates/input") {
       return sendDownload(
@@ -807,9 +843,19 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && !requestUrl.pathname.startsWith("/api/")) {
       if (serveFrontendAsset(res, requestUrl.pathname)) return;
     }
-    return send(res, 404, "Not found", "text/plain; charset=utf-8");
+    return send(res, 404, "Not found", "text/plain; charset=utf-8", requestOrigin);
   } catch (error) {
-    return json(res, 500, { detail: error.message || "Ошибка сервера" });
+    // Тело запроса превысило лимит — отдельный статус.
+    if (error && error.statusCode === 413) {
+      return json(res, 413, { detail: "Файл или запрос слишком большой" }, requestOrigin);
+    }
+    // Логируем полную ошибку на сервере, но клиенту отдаём обобщённое
+    // сообщение, чтобы не утекали стек-трейсы, пути и детали окружения.
+    console.error("Request handler error:", error);
+    const detail = EXPOSE_INTERNAL_ERRORS
+      ? (error && error.message) || "Ошибка сервера"
+      : "Внутренняя ошибка сервера";
+    return json(res, 500, { detail }, requestOrigin);
   }
 });
 
@@ -855,45 +901,94 @@ function serveFrontendAsset(res, requestPathname) {
   }
 
   const contentType = STATIC_MIME_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
-  res.writeHead(200, {
+  const staticHeaders = {
     "Content-Type": contentType,
+    "X-Content-Type-Options": "nosniff",
     "Cache-Control": filePath.includes(`${path.sep}_next${path.sep}`)
       ? "public, max-age=31536000, immutable"
       : "no-cache",
-  });
+  };
+  // Для HTML-документов добавляем защитные заголовки (кликджекинг, CSP).
+  if (contentType.startsWith("text/html")) {
+    staticHeaders["X-Frame-Options"] = "DENY";
+    staticHeaders["Referrer-Policy"] = "no-referrer";
+    staticHeaders["Content-Security-Policy"] =
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+  }
+  res.writeHead(200, staticHeaders);
   fs.createReadStream(filePath).pipe(res);
   return true;
 }
 
-function send(res, status, body, contentType) {
-  res.writeHead(status, {
-    "Content-Type": contentType,
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  });
+// Собирает безопасный набор CORS + защитных заголовков. Origin отражается
+// только если он в allowlist (CORS_ALLOWED_ORIGINS). Пустой allowlist =
+// same-origin: заголовок Access-Control-Allow-Origin не выставляется вовсе.
+function buildResponseHeaders(baseHeaders, requestOrigin) {
+  const headers = {
+    ...baseHeaders,
+    // Защитные заголовки для всех ответов.
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+  };
+  if (requestOrigin && CORS_ALLOWED_ORIGINS.includes(requestOrigin)) {
+    headers["Access-Control-Allow-Origin"] = requestOrigin;
+    headers["Vary"] = "Origin";
+    headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+    headers["Access-Control-Allow-Headers"] = "Content-Type, X-Debug-Token";
+    headers["Access-Control-Max-Age"] = "600";
+  }
+  return headers;
+}
+
+function send(res, status, body, contentType, requestOrigin) {
+  res.writeHead(status, buildResponseHeaders({ "Content-Type": contentType }, requestOrigin));
   res.end(body);
 }
 
-function sendDownload(res, status, body, contentType, filename) {
-  res.writeHead(status, {
-    "Content-Type": contentType,
-    "Content-Disposition": `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  });
+function sendDownload(res, status, body, contentType, filename, requestOrigin) {
+  res.writeHead(
+    status,
+    buildResponseHeaders(
+      {
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      },
+      requestOrigin,
+    ),
+  );
   res.end(body);
 }
 
-function json(res, status, payload) {
-  send(res, status, JSON.stringify(payload), "application/json; charset=utf-8");
+function json(res, status, payload, requestOrigin) {
+  send(res, status, JSON.stringify(payload), "application/json; charset=utf-8", requestOrigin);
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = MAX_REQUEST_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
+    let received = 0;
+    // Если клиент прислал Content-Length больше лимита — отклоняем сразу.
+    const declaredLength = Number(req.headers["content-length"] || 0);
+    if (declaredLength && declaredLength > maxBytes) {
+      const error = new Error("Request body too large");
+      error.statusCode = 413;
+      req.destroy();
+      reject(error);
+      return;
+    }
+    req.on("data", (chunk) => {
+      received += chunk.length;
+      if (received > maxBytes) {
+        const error = new Error("Request body too large");
+        error.statusCode = 413;
+        req.destroy();
+        reject(error);
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -1005,6 +1100,7 @@ function unzip(buffer) {
   if (eocdOffset < 0) throw new Error("Файл не похож на XLSX");
   const entries = buffer.readUInt16LE(eocdOffset + 10);
   let centralOffset = buffer.readUInt32LE(eocdOffset + 16);
+  let totalInflated = 0;
   for (let index = 0; index < entries; index += 1) {
     if (buffer.readUInt32LE(centralOffset) !== 0x02014b50) throw new Error("Некорректная ZIP-структура");
     const method = buffer.readUInt16LE(centralOffset + 10);
@@ -1020,8 +1116,15 @@ function unzip(buffer) {
     const compressed = buffer.subarray(dataStart, dataStart + compressedSize);
     let data;
     if (method === 0) data = compressed;
-    else if (method === 8) data = zlib.inflateRawSync(compressed);
-    else throw new Error(`Неподдерживаемое сжатие XLSX: ${method}`);
+    else if (method === 8) {
+      // Ограничиваем размер распакованных данных, чтобы вредоносный
+      // «zip-бомба»-XLSX не исчерпал память процесса.
+      data = zlib.inflateRawSync(compressed, { maxOutputLength: MAX_UNZIP_ENTRY_BYTES });
+    } else throw new Error(`Неподдерживаемое сжатие XLSX: ${method}`);
+    totalInflated += data.length;
+    if (data.length > MAX_UNZIP_ENTRY_BYTES || totalInflated > MAX_UNZIP_TOTAL_BYTES) {
+      throw new Error("XLSX слишком большой после распаковки");
+    }
     files[name] = data.toString("utf8");
     centralOffset += 46 + fileNameLength + extraLength + commentLength;
   }

@@ -75,7 +75,12 @@ export default function SupplyPage() {
   const [selectedWarehouses, setSelectedWarehouses] = useState<string[]>([]);
   const [localCandidates, setLocalCandidates] = useState<DraftCandidate[]>([]);
   const [isRedistributing, setIsRedistributing] = useState(false);
-  const [supplyMode, setSupplyMode] = useState<"direct" | "crossdock">("direct");
+  // Режим поставки задаётся отдельно для каждого кластера ("прямая" по
+  // умолчанию), а не один общий переключатель на всю поставку — так
+  // часть кластеров может ехать напрямую по Ozon-кластерам, а часть —
+  // через единую точку кросс-докинга (она одна на всю поставку, но
+  // применяется только к кластерам с режимом "crossdock").
+  const [clusterModes, setClusterModes] = useState<Record<string, "direct" | "crossdock">>({});
 
   const [dropOffPointId, setDropOffPointId] = useState("");
   const [dropOffPointType, setDropOffPointType] = useState("");
@@ -96,11 +101,17 @@ export default function SupplyPage() {
   const createableCandidates = useMemo(() => localCandidates.filter((c) => c.can_create !== false), [localCandidates]);
   const disabledCandidates = useMemo(() => localCandidates.filter((c) => c.can_create === false), [localCandidates]);
 
+  const selectionInitializedRef = useRef(false);
   useEffect(() => {
-    if (selectedWarehouses.length === 0 && createableCandidates.length > 0) {
+    // Автовыбор "все кластеры выбраны" должен сработать один раз — когда
+    // впервые пришли данные по новому файлу. Раньше условие было
+    // "selectedWarehouses.length === 0", из-за чего снятие последней
+    // галочки пользователем тоже обнуляло массив и тут же откатывало
+    // выбор обратно на "все выбраны" — казалось, что галочка не снимается.
+    if (!selectionInitializedRef.current && createableCandidates.length > 0) {
       setSelectedWarehouses(createableCandidates.map((c) => c.warehouse));
+      selectionInitializedRef.current = true;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createableCandidates.length]);
 
   useEffect(() => {
@@ -114,6 +125,7 @@ export default function SupplyPage() {
     setLastProcessResult(null);
     setRequestError(null);
     setSelectedWarehouses([]);
+    selectionInitializedRef.current = false;
   }
 
   async function handleUpload() {
@@ -184,10 +196,12 @@ export default function SupplyPage() {
   function deselectAll() {
     setSelectedWarehouses([]);
   }
+  function setClusterMode(warehouse: string, mode: "direct" | "crossdock") {
+    setClusterModes((prev) => ({ ...prev, [warehouse]: mode }));
+  }
 
   // Поиск точек кросс-докинга с дебаунсом
   useEffect(() => {
-    if (supplyMode !== "crossdock") return;
     const query = dropOffSearch.trim();
     if (query.length < 2 || query === selectedDropOffName) return;
     if (!hasFullCredentials) return;
@@ -208,7 +222,7 @@ export default function SupplyPage() {
       }
     }, 450);
     return () => clearTimeout(timer);
-  }, [dropOffSearch, supplyMode, selectedDropOffName, hasFullCredentials, clientId, apiKey]);
+  }, [dropOffSearch, selectedDropOffName, hasFullCredentials, clientId, apiKey]);
 
   function selectDropOffPoint(point: CrossdockPoint) {
     setDropOffPointId(point.id);
@@ -219,8 +233,9 @@ export default function SupplyPage() {
 
   const selectedCandidates = createableCandidates.filter((c) => selectedWarehouses.includes(c.warehouse));
   const selectedQuantity = selectedCandidates.reduce((sum, c) => sum + Number(c.total_quantity || 0), 0);
+  const selectedHasCrossdock = selectedCandidates.some((c) => (clusterModes[c.warehouse] ?? "direct") === "crossdock");
   const canCreateDrafts =
-    Boolean(selectedCandidates.length) && !isCreatingDrafts && !isRedistributing && (supplyMode === "direct" || Boolean(dropOffPointId.trim()));
+    Boolean(selectedCandidates.length) && !isCreatingDrafts && !isRedistributing && (!selectedHasCrossdock || Boolean(dropOffPointId.trim()));
 
   function mergeDraftCreationResults(draftResults: DraftCreationResult[]) {
     const successfulByWarehouse = new Map(draftResults.filter((i) => i.ok && i.draft_id).map((i) => [normalizeKey(i.warehouse), i]));
@@ -248,13 +263,16 @@ export default function SupplyPage() {
     );
     if (!approved) return;
 
-    const candidatesForCreate = selectedCandidates.map((c) => ({
-      ...c,
-      supply_mode: supplyMode,
-      draft_flow: supplyMode === "crossdock" ? "modern" : c.draft_flow,
-      drop_off_point_warehouse_id: supplyMode === "crossdock" ? dropOffPointId.trim() : null,
-      drop_off_point_warehouse_type: supplyMode === "crossdock" ? dropOffPointType.trim() : null,
-    }));
+    const candidatesForCreate = selectedCandidates.map((c) => {
+      const mode = clusterModes[c.warehouse] ?? "direct";
+      return {
+        ...c,
+        supply_mode: mode,
+        draft_flow: mode === "crossdock" ? "modern" : c.draft_flow,
+        drop_off_point_warehouse_id: mode === "crossdock" ? dropOffPointId.trim() : null,
+        drop_off_point_warehouse_type: mode === "crossdock" ? dropOffPointType.trim() : null,
+      };
+    });
 
     setIsCreatingDrafts(true);
     draftJobFinalResultsRef.current = [];
@@ -435,122 +453,132 @@ export default function SupplyPage() {
               <p>Файл обработан. Выберите кластеры и нажмите «Создать черновики» — система отправит запросы в Ozon Seller API.</p>
             </div>
 
-            {/* Supply type */}
-            <div className={styles.typeToggleWrap}>
-              <div className={styles.typeToggleLabel}>Тип поставки</div>
-              <div className={styles.typeToggle} role="radiogroup" aria-label="Тип поставки">
-                <div className={styles.typeIndicator} style={{ transform: supplyMode === "crossdock" ? "translateX(100%)" : "translateX(0)" }} />
-                <button type="button" role="radio" aria-checked={supplyMode === "direct"} className={`${styles.typeBtn} ${supplyMode === "direct" ? styles.typeBtnActive : ""}`} onClick={() => setSupplyMode("direct")}>
-                  <span className="tTitle" style={{ fontSize: 13, fontWeight: 600 }}>Прямая поставка</span>
-                  <span className="tSub" style={{ fontSize: 10.5 }}>по кластерам Ozon</span>
-                </button>
-                <button type="button" role="radio" aria-checked={supplyMode === "crossdock"} className={`${styles.typeBtn} ${supplyMode === "crossdock" ? styles.typeBtnActive : ""}`} onClick={() => setSupplyMode("crossdock")}>
-                  <span className="tTitle" style={{ fontSize: 13, fontWeight: 600 }}>Кроссдокинг</span>
-                  <span className="tSub" style={{ fontSize: 10.5 }}>через одну точку</span>
-                </button>
-              </div>
-            </div>
-
-            {supplyMode === "direct" ? (
-              <div>
-                <div className={styles.clustersHead}>
-                  <div>
-                    <div className={styles.clustersTitle}>Кластеры для поставки</div>
-                    <div className={styles.clustersSub}>Для каждого кластера будет создан отдельный черновик</div>
-                  </div>
-                  <div className={styles.clustersActions}>
-                    <span className={styles.clustersCount}>{selectedWarehouses.length} из {createableCandidates.length} выбрано</span>
-                    <button className={shell.btnText} onClick={selectAll}>Выбрать все</button>
-                    <button className={shell.btnText} onClick={deselectAll}>Снять все</button>
-                  </div>
+            <div>
+              <div className={styles.clustersHead}>
+                <div>
+                  <div className={styles.clustersTitle}>Кластеры для поставки</div>
+                  <div className={styles.clustersSub}>Для каждого кластера будет создан отдельный черновик. У каждого можно выбрать: прямая поставка по кластеру Ozon, или кроссдокинг через единую точку.</div>
                 </div>
+                <div className={styles.clustersActions}>
+                  <span className={styles.clustersCount}>{selectedWarehouses.length} из {createableCandidates.length} выбрано</span>
+                  <button className={shell.btnText} onClick={selectAll}>Выбрать все</button>
+                  <button className={shell.btnText} onClick={deselectAll}>Снять все</button>
+                </div>
+              </div>
 
-                <div className={styles.clusterList} role="group" aria-label="Список кластеров">
-                  {createableCandidates.map((c) => {
-                    const selected = selectedWarehouses.includes(c.warehouse);
-                    return (
-                      <div
-                        key={c.warehouse}
-                        role="checkbox"
-                        aria-checked={selected}
-                        tabIndex={0}
-                        className={`${styles.clusterRow} ${selected ? styles.clusterRowSelected : ""}`}
-                        onClick={() => toggleWarehouse(c.warehouse)}
-                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleWarehouse(c.warehouse); } }}
-                      >
-                        <div className={styles.clusterCheck}>
-                          <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-7" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
-                        </div>
-                        <div className={styles.clusterInfo}>
-                          <div className={styles.clusterName}>{c.warehouse}</div>
-                          <div className={styles.clusterMeta}>{c.rows_count} SKU</div>
-                        </div>
-                        <div className={styles.clusterStats}>
-                          <div className={styles.clusterStat}>
-                            <div className={styles.clusterStatLabel}>Кол-во</div>
-                            <div className={styles.clusterStatValue}>{c.total_quantity}</div>
-                          </div>
-                        </div>
-                        <span className={`${styles.clusterTag} ${selected ? styles.clusterTagSelected : styles.clusterTagUnselected}`}>{selected ? "Выбран" : "Idle"}</span>
-                        {c.draft_id && <span className={styles.clusterTag} style={{ background: "var(--success-dim)", color: "var(--success)", border: "1px solid rgba(34,197,94,0.25)" }}>Черновик создан</span>}
+              <div className={styles.clusterList} role="group" aria-label="Список кластеров">
+                {createableCandidates.map((c) => {
+                  const selected = selectedWarehouses.includes(c.warehouse);
+                  const mode = clusterModes[c.warehouse] ?? "direct";
+                  return (
+                    <div
+                      key={c.warehouse}
+                      role="checkbox"
+                      aria-checked={selected}
+                      tabIndex={0}
+                      className={`${styles.clusterRow} ${selected ? styles.clusterRowSelected : ""}`}
+                      onClick={() => toggleWarehouse(c.warehouse)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleWarehouse(c.warehouse); } }}
+                    >
+                      <div className={styles.clusterCheck}>
+                        <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-7" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
                       </div>
-                    );
-                  })}
-                  {disabledCandidates.map((c) => (
-                    <div key={c.warehouse} className={`${styles.clusterRow} ${styles.clusterRowDisabled}`}>
-                      <div className={styles.clusterCheck} />
                       <div className={styles.clusterInfo}>
                         <div className={styles.clusterName}>{c.warehouse}</div>
-                        <div className={`${styles.clusterMeta}`} style={{ color: "var(--error)" }}>{c.reason || "Нельзя создать черновик"}</div>
+                        <div className={styles.clusterMeta}>{c.rows_count} SKU</div>
                       </div>
-                      <span className={`${styles.clusterTag} ${styles.clusterTagError}`}>Ошибка</span>
-                    </div>
-                  ))}
-                  {isRedistributing && <div className={styles.crossdockEmpty}>Пересчитываем распределение…</div>}
-                </div>
-              </div>
-            ) : (
-              <div>
-                <div className={styles.clustersHead}>
-                  <div>
-                    <div className={styles.clustersTitle}>Точка кросс-докинга</div>
-                    <div className={styles.clustersSub}>Вся поставка одной партией уедет на выбранный кросс-докинг центр</div>
-                  </div>
-                  {selectedDropOffName && <span className={styles.clustersCount}>Выбрано: {selectedDropOffName}</span>}
-                </div>
-                <div className={`${shell.card}`} style={{ padding: 16 }}>
-                  <div className={styles.crossdockSearch}>
-                    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="7" /><path strokeLinecap="round" d="M21 21l-4.3-4.3" /></svg>
-                    <input
-                      type="text"
-                      placeholder="Найти город…"
-                      value={dropOffSearch}
-                      onChange={(e) => { setDropOffSearch(e.target.value); setSelectedDropOffName(""); }}
-                      autoComplete="off"
-                    />
-                  </div>
-                  <div className={styles.crossdockList}>
-                    {isSearchingDropOffs && <div className={styles.crossdockEmpty}>Ищем точки…</div>}
-                    {!isSearchingDropOffs && !dropOffPoints.length && dropOffSearch.trim().length >= 2 && (
-                      <div className={styles.crossdockEmpty}>Ничего не найдено</div>
-                    )}
-                    {dropOffPoints.map((p) => (
-                      <div
-                        key={p.id}
-                        className={`${styles.crossdockRow} ${dropOffPointId === p.id ? styles.crossdockRowSelected : ""}`}
-                        onClick={() => selectDropOffPoint(p)}
-                      >
-                        <div className={styles.crossdockRadio} />
-                        <div className={styles.crossdockInfo}>
-                          <div className={styles.crossdockName}>{p.name}</div>
-                          {p.address && <div className={styles.crossdockMeta}>{p.address}</div>}
+                      <div className={styles.clusterStats}>
+                        <div className={styles.clusterStat}>
+                          <div className={styles.clusterStatLabel}>Кол-во</div>
+                          <div className={styles.clusterStatValue}>{c.total_quantity}</div>
                         </div>
                       </div>
-                    ))}
+                      <div
+                        className={styles.clusterModeToggle}
+                        role="radiogroup"
+                        aria-label={`Тип поставки — ${c.warehouse}`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={mode === "direct"}
+                          className={`${styles.clusterModeBtn} ${mode === "direct" ? styles.clusterModeBtnActive : ""}`}
+                          onClick={() => setClusterMode(c.warehouse, "direct")}
+                        >
+                          Прямая
+                        </button>
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={mode === "crossdock"}
+                          className={`${styles.clusterModeBtn} ${mode === "crossdock" ? styles.clusterModeBtnActiveCrossdock : ""}`}
+                          onClick={() => setClusterMode(c.warehouse, "crossdock")}
+                        >
+                          Кроссдок
+                        </button>
+                      </div>
+                      <span className={`${styles.clusterTag} ${selected ? styles.clusterTagSelected : styles.clusterTagUnselected}`}>{selected ? "Выбран" : "Idle"}</span>
+                      {c.draft_id && <span className={styles.clusterTag} style={{ background: "var(--success-dim)", color: "var(--success)", border: "1px solid rgba(34,197,94,0.25)" }}>Черновик создан</span>}
+                    </div>
+                  );
+                })}
+                {disabledCandidates.map((c) => (
+                  <div key={c.warehouse} className={`${styles.clusterRow} ${styles.clusterRowDisabled}`}>
+                    <div className={styles.clusterCheck} />
+                    <div className={styles.clusterInfo}>
+                      <div className={styles.clusterName}>{c.warehouse}</div>
+                      <div className={`${styles.clusterMeta}`} style={{ color: "var(--error)" }}>{c.reason || "Нельзя создать черновик"}</div>
+                    </div>
+                    <span className={`${styles.clusterTag} ${styles.clusterTagError}`}>Ошибка</span>
+                  </div>
+                ))}
+                {isRedistributing && <div className={styles.crossdockEmpty}>Пересчитываем распределение…</div>}
+              </div>
+
+              {selectedHasCrossdock && (
+                <div style={{ marginTop: 16 }}>
+                  <div className={styles.clustersHead}>
+                    <div>
+                      <div className={styles.clustersTitle}>Точка кросс-докинга</div>
+                      <div className={styles.clustersSub}>Одна точка на всю поставку — все кластеры в режиме «Кроссдок» уедут через неё одной партией</div>
+                    </div>
+                    {selectedDropOffName && <span className={styles.clustersCount}>Выбрано: {selectedDropOffName}</span>}
+                  </div>
+                  <div className={`${shell.card}`} style={{ padding: 16 }}>
+                    <div className={styles.crossdockSearch}>
+                      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="7" /><path strokeLinecap="round" d="M21 21l-4.3-4.3" /></svg>
+                      <input
+                        type="text"
+                        placeholder="Найти город…"
+                        value={dropOffSearch}
+                        onChange={(e) => { setDropOffSearch(e.target.value); setSelectedDropOffName(""); }}
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className={styles.crossdockList}>
+                      {isSearchingDropOffs && <div className={styles.crossdockEmpty}>Ищем точки…</div>}
+                      {!isSearchingDropOffs && !dropOffPoints.length && dropOffSearch.trim().length >= 2 && (
+                        <div className={styles.crossdockEmpty}>Ничего не найдено</div>
+                      )}
+                      {dropOffPoints.map((p) => (
+                        <div
+                          key={p.id}
+                          className={`${styles.crossdockRow} ${dropOffPointId === p.id ? styles.crossdockRowSelected : ""}`}
+                          onClick={() => selectDropOffPoint(p)}
+                        >
+                          <div className={styles.crossdockRadio} />
+                          <div className={styles.crossdockInfo}>
+                            <div className={styles.crossdockName}>{p.name}</div>
+                            {p.address && <div className={styles.crossdockMeta}>{p.address}</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Action bar */}
             <div className={`${shell.card} ${styles.actionBar}`}>

@@ -118,7 +118,7 @@ export default function FaqPage() {
     <div>
       <nav className={nav.nav}>
         <a className={nav.navLogo} href="/">
-          <BrandMark size={22} />
+          <BrandMark height={30} />
         </a>
         <div className={nav.navLinks}>
           <a className={nav.navLink} href="/pricing">Тарифы</a>

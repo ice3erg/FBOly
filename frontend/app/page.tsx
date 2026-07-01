@@ -14,7 +14,7 @@ export default function LandingPage() {
       <div className={styles.page}>
         <nav className={styles.nav}>
           <a className={styles.navLogo} href="/">
-            <BrandMark size={32} />
+            <BrandMark height={30} />
           </a>
           <div className={styles.navLinks}>
             <a className={styles.navLink} href="/pricing">Тарифы</a>

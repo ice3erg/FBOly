@@ -1,13 +1,14 @@
 // Единая логотип-картинка FBOly для маркетинговых страниц (лендинг,
-// тарифы, FAQ, документация) и сайдбара приложения. Просто вордмарк-PNG,
+// тарифы, FAQ, документация) и сайдбара приложения. Просто вордмарк-PNG
 // без квадратной иконки и без текстового дублирования рядом.
+// Файл обрезан по границам текста (без прозрачных полей), поэтому
+// заданная высота = реальная высота букв на экране.
 import Image from "next/image";
 
-export function BrandMark({ size = 22 }: { size?: number }) {
-  // Логотип широкий (примерное соотношение сторон ~2.3:1), высоту берём
-  // из size, ширину считаем пропорционально.
-  const height = Math.round(size * 1.35);
-  const width = Math.round(height * 2.3);
+const ASPECT_RATIO = 1211 / 356; // ширина / высота фактического PNG после обрезки
+
+export function BrandMark({ height = 30 }: { height?: number }) {
+  const width = Math.round(height * ASPECT_RATIO);
   return (
     <Image
       src="/fboly-logo.png"
