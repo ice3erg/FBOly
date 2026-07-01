@@ -2,9 +2,19 @@ const http = require("node:http");
 const zlib = require("node:zlib");
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const db = require("./db");
 const auth = require("./auth");
 const billing = require("./billing");
+const ratelimit = require("./ratelimit");
+
+// Сравнение строк в постоянном времени (для секретов вроде debug-токена).
+function timingSafeEqualStr(a, b) {
+  const bufA = Buffer.from(String(a || ""), "utf8");
+  const bufB = Buffer.from(String(b || ""), "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 const PORT = Number(process.env.PORT || 3000);
 const OZON_API_BASE_URL = process.env.OZON_API_BASE_URL || "https://api-seller.ozon.ru";
@@ -510,7 +520,7 @@ const server = http.createServer(async (req, res) => {
       // Чтобы не допустить межарендаторного раскрытия (IDOR), эндпоинт
       // доступен только при заданном REQUEST_LOG_DEBUG_TOKEN и совпадении
       // заголовка X-Debug-Token. Иначе — 404 (не выдаём сам факт наличия).
-      if (!REQUEST_LOG_DEBUG_TOKEN || req.headers["x-debug-token"] !== REQUEST_LOG_DEBUG_TOKEN) {
+      if (!REQUEST_LOG_DEBUG_TOKEN || !timingSafeEqualStr(req.headers["x-debug-token"], REQUEST_LOG_DEBUG_TOKEN)) {
         return send(res, 404, "Not found", "text/plain; charset=utf-8", requestOrigin);
       }
       const clientId = requestUrl.searchParams.get("client_id") || "";
@@ -845,15 +855,27 @@ const server = http.createServer(async (req, res) => {
     }
     // ── Аккаунты ────────────────────────────────────────────────────────
     if (req.method === "POST" && requestUrl.pathname === "/api/auth/register") {
+      // Ограничиваем регистрацию по IP: 5 аккаунтов за 15 минут — этого
+      // с запасом хватает живому человеку и режет массовое создание
+      // аккаунтов (спам, перебор email).
+      const rl = ratelimit.check(`register:${ratelimit.clientIp(req)}`, 5, 15 * 60 * 1000);
+      if (!rl.allowed) {
+        return json(res, 429, { detail: "Слишком много попыток регистрации. Повторите позже." }, requestOrigin, {
+          "Retry-After": String(rl.retryAfterSec),
+        });
+      }
       const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
       const email = String(body.email || "").trim().toLowerCase();
       const password = String(body.password || "");
-      const name = String(body.name || "").trim();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      const name = String(body.name || "").trim().slice(0, 200);
+      if (email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return json(res, 400, { detail: "Некорректный email" }, requestOrigin);
       }
       if (password.length < 6) {
         return json(res, 400, { detail: "Пароль должен быть не короче 6 символов" }, requestOrigin);
+      }
+      if (password.length > auth.MAX_PASSWORD_LENGTH) {
+        return json(res, 400, { detail: "Слишком длинный пароль" }, requestOrigin);
       }
       const existing = await db.query(`SELECT id FROM users WHERE email = $1`, [email]);
       if (existing.rows.length) {
@@ -872,9 +894,30 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && requestUrl.pathname === "/api/auth/login") {
+      // Брутфорс-защита: лимитируем И по IP, И по email. Двойной ключ не
+      // даёт ни перебирать пароли одного аккаунта с разных IP, ни один IP
+      // гонять по многим аккаунтам. 10 попыток за 15 минут.
+      const clientIp = ratelimit.clientIp(req);
+      const ipRl = ratelimit.check(`login-ip:${clientIp}`, 10, 15 * 60 * 1000);
+      if (!ipRl.allowed) {
+        return json(res, 429, { detail: "Слишком много попыток входа. Повторите позже." }, requestOrigin, {
+          "Retry-After": String(ipRl.retryAfterSec),
+        });
+      }
       const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
       const email = String(body.email || "").trim().toLowerCase();
       const password = String(body.password || "");
+      if (password.length > auth.MAX_PASSWORD_LENGTH) {
+        return json(res, 401, { detail: "Неверный email или пароль" }, requestOrigin);
+      }
+      if (email) {
+        const emailRl = ratelimit.check(`login-email:${email}`, 10, 15 * 60 * 1000);
+        if (!emailRl.allowed) {
+          return json(res, 429, { detail: "Слишком много попыток входа. Повторите позже." }, requestOrigin, {
+            "Retry-After": String(emailRl.retryAfterSec),
+          });
+        }
+      }
       const found = await db.query(`SELECT * FROM users WHERE email = $1`, [email]);
       const user = found.rows[0];
       // Намеренно один и тот же текст ошибки и для "нет такого email", и
@@ -903,6 +946,15 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && requestUrl.pathname === "/api/billing/checkout") {
       const user = await auth.getUserFromCookie(req);
       if (!user) return json(res, 401, { detail: "Не авторизован" }, requestOrigin);
+      // Ограничиваем создание платежей на пользователя — 10 за 10 минут.
+      // Достаточно для повторных попыток при сбое оплаты, но не даёт
+      // засыпать ЮKassa массой pending-платежей.
+      const rl = ratelimit.check(`checkout:${user.id}`, 10, 10 * 60 * 1000);
+      if (!rl.allowed) {
+        return json(res, 429, { detail: "Слишком много попыток оплаты. Повторите позже." }, requestOrigin, {
+          "Retry-After": String(rl.retryAfterSec),
+        });
+      }
       const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
       const plan = String(body.plan || "");
       const result = await billing.createPayment({ userId: user.id, userEmail: user.email, plan });
@@ -1032,6 +1084,11 @@ function buildResponseHeaders(baseHeaders, requestOrigin) {
     "Referrer-Policy": "no-referrer",
     "Cross-Origin-Opener-Policy": "same-origin",
   };
+  // HSTS только в проде (за TLS Render). Локально по HTTP не выставляем,
+  // чтобы не залочить браузер на https для localhost.
+  if (process.env.NODE_ENV === "production") {
+    headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+  }
   if (requestOrigin && CORS_ALLOWED_ORIGINS.includes(requestOrigin)) {
     headers["Access-Control-Allow-Origin"] = requestOrigin;
     headers["Vary"] = "Origin";

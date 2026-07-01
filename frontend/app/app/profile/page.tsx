@@ -59,7 +59,18 @@ export default function ProfilePage() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "Не удалось создать платёж");
       if (!payload.confirmationUrl) throw new Error("ЮKassa не вернула ссылку на оплату");
-      window.location.href = payload.confirmationUrl;
+      // Проверяем, что ссылка ведёт именно на домен ЮKassa — защита от
+      // открытого редиректа, если ответ вдруг окажется подменён.
+      let target: URL;
+      try {
+        target = new URL(payload.confirmationUrl);
+      } catch {
+        throw new Error("Некорректная ссылка на оплату");
+      }
+      const host = target.hostname.toLowerCase();
+      const allowed = target.protocol === "https:" && (host === "yoomoney.ru" || host.endsWith(".yoomoney.ru") || host === "yookassa.ru" || host.endsWith(".yookassa.ru"));
+      if (!allowed) throw new Error("Ссылка на оплату ведёт на недоверенный домен");
+      window.location.href = target.toString();
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Не удалось перейти к оплате");
       setCheckoutLoadingPlan(null);

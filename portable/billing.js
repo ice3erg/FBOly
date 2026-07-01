@@ -135,6 +135,19 @@ async function handleWebhookNotification(body) {
   await db.query(`UPDATE payments SET status = $1, updated_at = now() WHERE id = $2`, [payment.status, paymentId]);
 
   if (payment.status === "succeeded") {
+    // Сверяем реально оплаченную сумму с той, что мы ожидали при создании
+    // платежа (записана в payments.amount_kopeks). Без этой проверки
+    // манипуляция суммой на стороне оплаты дала бы апгрейд тарифа за
+    // произвольную (в т.ч. заниженную) сумму. Сравниваем в копейках.
+    const paidKopeks = payment.amount && payment.amount.value ? Math.round(Number(payment.amount.value) * 100) : NaN;
+    const paidCurrency = payment.amount && payment.amount.currency;
+    if (paidCurrency !== "RUB" || !Number.isFinite(paidKopeks) || paidKopeks < paymentRow.amount_kopeks) {
+      console.error(
+        `[billing] amount mismatch for payment ${paymentId}: expected >=${paymentRow.amount_kopeks} kopeks RUB, got ${paidKopeks} ${paidCurrency}. Plan NOT upgraded.`,
+      );
+      await db.query(`UPDATE payments SET status = $1, updated_at = now() WHERE id = $2`, ["amount_mismatch", paymentId]);
+      return { ok: false, reason: "amount mismatch" };
+    }
     const activeUntil = new Date();
     activeUntil.setMonth(activeUntil.getMonth() + 1);
     const paymentMethodId =

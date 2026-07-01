@@ -20,6 +20,12 @@ if (!SESSION_SECRET) {
 const EFFECTIVE_SECRET = SESSION_SECRET || "insecure-dev-fallback-secret-change-me";
 
 // ── Пароли ──────────────────────────────────────────────────────────────
+// Верхняя граница длины пароля: scrypt по стоимости растёт с длиной входа,
+// поэтому без лимита гигантский пароль (например, 10 МБ) — это дешёвый DoS
+// (один запрос надолго занимает event loop). 1024 символа с запасом хватает
+// любому реальному паролю/парольной фразе.
+const MAX_PASSWORD_LENGTH = 1024;
+
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
   const derived = crypto.scryptSync(password, salt, 64).toString("hex");
@@ -38,6 +44,16 @@ function verifyPassword(password, stored) {
 // ── Сессии ──────────────────────────────────────────────────────────────
 function signToken(token) {
   return crypto.createHmac("sha256", EFFECTIVE_SECRET).update(token).digest("hex");
+}
+
+// Сравнение подписи в постоянном времени — обычное `a !== b` для HMAC
+// теоретически даёт timing-side-channel на подбор валидной подписи.
+function verifyTokenSignature(token, signature) {
+  const expected = signToken(token);
+  const a = Buffer.from(String(signature || ""), "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 function hashToken(token) {
@@ -77,8 +93,8 @@ async function getUserFromCookie(req) {
   const [token, signature] = raw.split(".");
   if (!token || !signature) return null;
   // Проверяем подпись до похода в БД — отсекает заведомо подделанные
-  // значения без лишнего запроса.
-  if (signature !== signToken(token)) return null;
+  // значения без лишнего запроса. Сравнение в постоянном времени.
+  if (!verifyTokenSignature(token, signature)) return null;
   const { rows } = await db.query(
     `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now()`,
     [hashToken(token)],
@@ -101,7 +117,10 @@ function sessionCookieHeader(tokenWithSignature) {
 }
 
 function clearCookieHeader() {
-  return `${SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+  // Атрибуты (Secure/SameSite/Path) должны совпадать с sessionCookieHeader,
+  // иначе часть браузеров не считает это той же cookie и не удаляет её.
+  const secure = process.env.NODE_ENV === "production" || process.env.FORCE_SECURE_COOKIE === "1" ? " Secure;" : "";
+  return `${SESSION_COOKIE_NAME}=; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=0`;
 }
 
 function publicUser(user) {
@@ -124,4 +143,5 @@ module.exports = {
   sessionCookieHeader,
   clearCookieHeader,
   publicUser,
+  MAX_PASSWORD_LENGTH,
 };
