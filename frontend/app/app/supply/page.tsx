@@ -361,6 +361,9 @@ export default function SupplyPage() {
         </div>
 
         {/* Upload */}
+        {/* Инпут всегда в DOM, независимо от того, выбран файл или нет — */}
+        {/* иначе клик по дропзоне ссылался на несуществующий ref и не открывал диалог выбора файла. */}
+        <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className={styles.srOnly} onChange={handleFileChange} />
         {!selectedFile && !lastProcessResult ? (
           <div className={`${shell.card} ${styles.dropZone}`} onClick={() => fileInputRef.current?.click()}>
             <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="var(--accent)" strokeWidth={1.5}>
@@ -384,7 +387,6 @@ export default function SupplyPage() {
                 {lastProcessResult ? <>Обработано: <b>{lastProcessResult.resolved_items.length} SKU</b>, <b>{lastProcessResult.total_output_quantity} шт</b></> : "Нажмите «Загрузить», чтобы обработать файл"}
               </div>
             </div>
-            <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className={styles.srOnly} onChange={handleFileChange} />
             {!lastProcessResult && (
               <button className={shell.btnPrimary} onClick={handleUpload} disabled={isLoading}>
                 {isLoading && <span className={styles.spinner} />}
