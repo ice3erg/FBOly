@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useApp } from "../AppContext";
 import shell from "../shell.module.css";
 import styles from "./slots.module.css";
-import { API_URL, formatRequestError, normalizeKey } from "@/lib/api";
-import type { SlotHunterJob } from "@/lib/types";
+import { API_URL, createBrowserId, formatRequestError } from "@/lib/api";
+import type { DraftCandidate, SlotHunterJob } from "@/lib/types";
 
 const CARGO_LABELS = ["Любой", "Короба", "Паллеты"] as const;
 const CARGO_VALUES = ["any", "box", "pallet"] as const;
@@ -24,7 +24,31 @@ export default function SlotsPage() {
   const { clientId, apiKey, lastProcessResult } = useApp();
   const hasFullCredentials = Boolean(clientId.trim() && apiKey.trim());
 
-  const candidates = (lastProcessResult?.draft_candidates ?? []).filter((c) => c.can_create !== false);
+  const uploadedCandidates = (lastProcessResult?.draft_candidates ?? []).filter((c) => c.can_create !== false);
+
+  // Ozon не даёт единого API-метода «показать все черновики» — черновик
+  // доступен только по конкретному ID. Поэтому если поставка не обрабатывалась
+  // в этой сессии, даём охотиться по черновику, который уже существует в
+  // личном кабинете Ozon (создан вручную или в прошлой сессии).
+  type ManualEntry = { key: string; warehouse: string; draftId: string };
+  const [manualEntries, setManualEntries] = useState<ManualEntry[]>([{ key: createBrowserId("m"), warehouse: "", draftId: "" }]);
+
+  const manualCandidates: DraftCandidate[] = manualEntries
+    .filter((e) => e.warehouse.trim() && e.draftId.trim())
+    .map((e) => ({ warehouse: e.warehouse.trim(), draft_id: e.draftId.trim(), rows_count: 0, total_quantity: 0, can_create: true }));
+
+  const usingManualEntry = !lastProcessResult;
+  const candidates = usingManualEntry ? manualCandidates : uploadedCandidates;
+
+  function addManualEntry() {
+    setManualEntries((cur) => [...cur, { key: createBrowserId("m"), warehouse: "", draftId: "" }]);
+  }
+  function updateManualEntry(key: string, patch: Partial<ManualEntry>) {
+    setManualEntries((cur) => cur.map((e) => (e.key === key ? { ...e, ...patch } : e)));
+  }
+  function removeManualEntry(key: string) {
+    setManualEntries((cur) => (cur.length > 1 ? cur.filter((e) => e.key !== key) : cur));
+  }
 
   const [autoBook, setAutoBook] = useState(true);
   const [dateFrom, setDateFrom] = useState("");
@@ -101,7 +125,7 @@ export default function SlotsPage() {
 
   async function startHunt() {
     if (!candidates.length) {
-      setError("Сначала рассчитайте поставку на странице «Поставка», чтобы появились города для поиска слотов.");
+      setError("Обработайте поставку на странице «Поставка» или укажите город и ID черновика вручную выше.");
       return;
     }
     const huntCandidates = candidates.filter((c) => selectedWarehouses.includes(c.warehouse));
@@ -183,49 +207,78 @@ export default function SlotsPage() {
       </div>
 
       <div className={shell.content}>
-        {!lastProcessResult ? (
-          <div className={`${shell.card} ${styles.resultsPlaceholder}`}>
-            Сначала обработайте поставку на странице «Поставка» — оттуда появятся города и черновики для охоты.
-          </div>
-        ) : (
-          <>
-            {/* Mini stepper */}
-            <div className={`${shell.card} ${styles.stepperCard}`}>
-              <div className={styles.stepperTrack}><div className={styles.stepperFill} style={{ transform: "scaleX(1)" }} /></div>
-              <div className={styles.stepperSteps}>
-                <div className={styles.step}>
-                  <div className={`${styles.stepDot} ${styles.stepDotDone}`}>
-                    <svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-7" stroke="#22C55E" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
-                  </div>
-                  <div><div className={`${styles.stepLabel} ${styles.stepLabelDone}`}>Загрузить Excel</div><div className={styles.stepSub}>Готово</div></div>
+        <>
+          {usingManualEntry ? (
+            <div className={`${shell.card} ${styles.panel}`} style={{ gap: 12 }}>
+              <div className={styles.panelLabel}>Черновик уже есть в Ozon?</div>
+              <p style={{ fontSize: 12.5, color: "var(--text-sec)", margin: "-4px 0 4px" }}>
+                Поставка не обрабатывалась в этой сессии — Ozon не даёт получить список черновиков автоматически.
+                Укажите город и ID черновика вручную, чтобы запустить охоту без повторной загрузки Excel.
+              </p>
+              {manualEntries.map((e) => (
+                <div key={e.key} style={{ display: "flex", gap: 8 }}>
+                  <input
+                    className={styles.fieldInput}
+                    style={{ flex: 1, height: 38 }}
+                    placeholder="Город (например, Москва — Юг)"
+                    value={e.warehouse}
+                    onChange={(ev) => updateManualEntry(e.key, { warehouse: ev.target.value })}
+                  />
+                  <input
+                    className={styles.fieldInput}
+                    style={{ flex: 1, height: 38, fontFamily: "var(--font-mono)" }}
+                    placeholder="ID черновика"
+                    value={e.draftId}
+                    onChange={(ev) => updateManualEntry(e.key, { draftId: ev.target.value })}
+                  />
+                  {manualEntries.length > 1 && (
+                    <button className={styles.btnSm} onClick={() => removeManualEntry(e.key)} aria-label="Удалить">×</button>
+                  )}
                 </div>
-                <div className={styles.step}>
-                  <div className={`${styles.stepDot} ${styles.stepDotDone}`}>
-                    <svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-7" stroke="#22C55E" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
+              ))}
+              <button className={shell.btnText} style={{ alignSelf: "flex-start" }} onClick={addManualEntry}>+ Добавить ещё черновик</button>
+            </div>
+          ) : (
+            <>
+              {/* Mini stepper */}
+              <div className={`${shell.card} ${styles.stepperCard}`}>
+                <div className={styles.stepperTrack}><div className={styles.stepperFill} style={{ transform: "scaleX(1)" }} /></div>
+                <div className={styles.stepperSteps}>
+                  <div className={styles.step}>
+                    <div className={`${styles.stepDot} ${styles.stepDotDone}`}>
+                      <svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-7" stroke="#22C55E" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
+                    </div>
+                    <div><div className={`${styles.stepLabel} ${styles.stepLabelDone}`}>Загрузить Excel</div><div className={styles.stepSub}>Готово</div></div>
                   </div>
-                  <div><div className={`${styles.stepLabel} ${styles.stepLabelDone}`}>Подготовить</div><div className={styles.stepSub}>{candidates.length} черновика</div></div>
-                </div>
-                <div className={styles.step}>
-                  <div className={`${styles.stepDot} ${styles.stepDotActive}`}>3</div>
-                  <div><div className={`${styles.stepLabel} ${styles.stepLabelCurrent}`}>Найти слот</div><div className={styles.stepSub}>{isActive ? "Поиск идёт" : "Готово к поиску"}</div></div>
+                  <div className={styles.step}>
+                    <div className={`${styles.stepDot} ${styles.stepDotDone}`}>
+                      <svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-7" stroke="#22C55E" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
+                    </div>
+                    <div><div className={`${styles.stepLabel} ${styles.stepLabelDone}`}>Подготовить</div><div className={styles.stepSub}>{candidates.length} черновика</div></div>
+                  </div>
+                  <div className={styles.step}>
+                    <div className={`${styles.stepDot} ${styles.stepDotActive}`}>3</div>
+                    <div><div className={`${styles.stepLabel} ${styles.stepLabelCurrent}`}>Найти слот</div><div className={styles.stepSub}>{isActive ? "Поиск идёт" : "Готово к поиску"}</div></div>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Ready banner */}
-            <div className={`${shell.card} ${styles.readyCard}`}>
-              <div className={styles.readyIcon}>
-                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#22C55E" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+              {/* Ready banner */}
+              <div className={`${shell.card} ${styles.readyCard}`}>
+                <div className={styles.readyIcon}>
+                  <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#22C55E" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div className={styles.readyTitle}>Черновики готовы</div>
+                  <div className={styles.readySub}>Начнём поиск слотов по выбранным черновикам</div>
+                </div>
+                <div className={styles.readyMeta}>
+                  <div className={styles.readyMetaN}>{candidates.length} кластера · {candidates.reduce((s, c) => s + Number(c.total_quantity || 0), 0)} шт.</div>
+                  <div className={styles.readyMetaL}>{candidates.map((c) => c.warehouse).join(", ")}</div>
+                </div>
               </div>
-              <div style={{ flex: 1 }}>
-                <div className={styles.readyTitle}>Черновики готовы</div>
-                <div className={styles.readySub}>Начнём поиск слотов по выбранным черновикам</div>
-              </div>
-              <div className={styles.readyMeta}>
-                <div className={styles.readyMetaN}>{candidates.length} кластера · {candidates.reduce((s, c) => s + Number(c.total_quantity || 0), 0)} шт.</div>
-                <div className={styles.readyMetaL}>{candidates.map((c) => c.warehouse).join(", ")}</div>
-              </div>
-            </div>
+            </>
+          )}
 
             {error && (
               <div className={`${shell.card} ${styles.cityErrorBox}`} style={{ borderLeftWidth: 3 }}>
@@ -408,7 +461,6 @@ export default function SlotsPage() {
               )}
             </div>
           </>
-        )}
       </div>
 
       {toast && <div className={`${styles.toast} ${styles.show}`}>{toast}</div>}

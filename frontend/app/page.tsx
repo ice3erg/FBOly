@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import { BrandMark } from "./BrandMark";
 import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./landing.module.css";
@@ -14,7 +14,7 @@ export default function LandingPage() {
       <div className={styles.page}>
         <nav className={styles.nav}>
           <a className={styles.navLogo} href="/">
-            <Image src="/fboly-logo.png" alt="FBOly" width={32} height={32} priority />
+            <BrandMark size={32} />
           </a>
           <div className={styles.navLinks}>
             <a className={styles.navLink} href="/pricing">Тарифы</a>

@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import { BrandMark } from "../BrandMark";
 import { useRouter } from "next/navigation";
 import nav from "../marketing-chrome.module.css";
 import styles from "./docs.module.css";
@@ -41,7 +41,7 @@ export default function DocsPage() {
     <div>
       <nav className={nav.nav}>
         <a className={nav.navLogo} href="/">
-          <Image src="/fboly-logo.png" alt="FBOly" width={22} height={22} />
+          <BrandMark size={22} />
         </a>
         <div className={nav.navLinks}>
           <a className={nav.navLink} href="/pricing">Тарифы</a>

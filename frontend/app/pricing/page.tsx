@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import { BrandMark } from "../BrandMark";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import styles from "./pricing.module.css";
@@ -59,7 +59,7 @@ export default function PricingPage() {
     <div className={styles.root}>
       <nav className={styles.nav}>
         <a className={styles.navLogo} href="/">
-          <Image src="/fboly-logo.png" alt="FBOly" width={22} height={22} />
+          <BrandMark size={22} />
         </a>
         <div className={styles.navLinks}>
           <a className={`${styles.navLink} ${styles.navLinkActive}`} href="/pricing">Тарифы</a>

@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import styles from "./shell.module.css";
@@ -71,7 +70,9 @@ export function Sidebar() {
               <polygon points="5,11 16,11 12,15 9,15 9,21 5,21" />
             </svg>
           </div>
-          <Image className={styles.logoImg} src="/fboly-logo.png" alt="FBOly" width={20} height={20} />
+          <span className={styles.logoImg} aria-hidden="true">
+            FBO<span style={{ color: "var(--accent-light)" }}>ly</span>
+          </span>
         </Link>
 
         <nav className={styles.sidebarNav}>

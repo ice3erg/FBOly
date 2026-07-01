@@ -38,6 +38,7 @@ const FBOLY_AUTH_SESSION_KEY = "fboly-auth-session";
 const STORES_STORAGE_KEY = "ozon-fbo-service-stores";
 const ACTIVE_STORE_STORAGE_KEY = "ozon-fbo-service-active-store";
 const CREDENTIALS_STORAGE_KEY = "ozon-fbo-service-credentials";
+const LAST_PROCESS_RESULT_KEY = "fboly-last-process-result";
 
 const DEFAULT_USER: AppUser = {
   name: "Пользователь",
@@ -91,7 +92,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     message: "Кабинет Ozon ещё не проверен",
   });
   const [isCheckingConnection, setIsCheckingConnection] = useState(false);
-  const [lastProcessResult, setLastProcessResult] = useState<ProcessResponse | null>(null);
+  const [lastProcessResult, setLastProcessResultState] = useState<ProcessResponse | null>(null);
+  const setLastProcessResult = useCallback((result: ProcessResponse | null) => {
+    setLastProcessResultState(result);
+    try {
+      if (result) window.localStorage.setItem(LAST_PROCESS_RESULT_KEY, JSON.stringify(result));
+      else window.localStorage.removeItem(LAST_PROCESS_RESULT_KEY);
+    } catch {
+      // localStorage может быть переполнен на очень больших поставках — не блокируем UI
+    }
+  }, []);
 
   // ── Auth-гейт + загрузка сохранённого состояния ──
   useEffect(() => {
@@ -182,6 +192,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
 
     setReady(true);
+
+    // Результат последней обработки Excel — переживает обновление страницы
+    // и прямой заход на /app/slots, минуя /app/supply (раньше терялся,
+    // так как жил только в памяти React).
+    try {
+      const savedResult = window.localStorage.getItem(LAST_PROCESS_RESULT_KEY);
+      if (savedResult) setLastProcessResultState(JSON.parse(savedResult));
+    } catch {
+      window.localStorage.removeItem(LAST_PROCESS_RESULT_KEY);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
