@@ -5,8 +5,15 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import styles from "./pricing.module.css";
 
-const PRO_MONTHLY = 1490;
-const TEAM_MONTHLY = 3990;
+// Цены посчитаны по рынку конкурентов (сервисы поиска/бронирования
+// слотов Ozon, июль 2026): SlotLoom — флэт-подписка 1990 ₽/мес за весь
+// функционал; MetricLab — пакеты по 140–198 ₽/бронирование (990 ₽ за 5,
+// 6990 ₽ за 50). FBOly закрывает больше, чем просто слот-бронирование
+// (Excel → распределение по кластерам → черновики → слот), поэтому Pro
+// поставлен на уровне флэт-конкурента, а не выше — чтобы не проигрывать
+// по цене за бо́льшую функциональность.
+const PRO_MONTHLY = 1990;
+const TEAM_MONTHLY = 4990;
 // Годовая оплата — 2 месяца в подарок (стандартная SaaS-скидка ~17%),
 // в исходном макете это было плейсхолдером {{ proPrice }}/{{ teamPrice }}
 // без реальных чисел — здесь считаем по формуле.
@@ -22,29 +29,6 @@ function CheckIcon() {
 function DashIcon() {
   return <div className={styles.dash}>—</div>;
 }
-
-const FAQ = [
-  {
-    q: "Нужно ли вводить данные карты для Старт?",
-    a: "Нет. Тариф «Старт» абсолютно бесплатен без привязки карты. Карта нужна только при переходе на платный тариф.",
-  },
-  {
-    q: "Могу ли я сменить тариф в любое время?",
-    a: "Да. Повысить тариф — мгновенно, доступ открывается сразу. Понизить — в конце расчётного периода без потери данных.",
-  },
-  {
-    q: "Что такое «охота на слоты»?",
-    a: "Система автоматически проверяет доступность слотов на выбранных складах и захватывает нужный, как только он появляется. Вам не нужно быть за компьютером.",
-  },
-  {
-    q: "Работает ли FBOly с несколькими магазинами?",
-    a: "В тарифах Старт и Pro — один магазин. В тарифе «Команда» можно подключить несколько магазинов Ozon к одному аккаунту.",
-  },
-  {
-    q: "Есть ли пробный период для Pro?",
-    a: "Да — 14 дней Pro бесплатно при регистрации. После окончания пробного периода автоматически переходите на Старт, если не указали карту.",
-  },
-];
 
 export default function PricingPage() {
   const router = useRouter();
@@ -63,7 +47,7 @@ export default function PricingPage() {
         </a>
         <div className={styles.navLinks}>
           <a className={`${styles.navLink} ${styles.navLinkActive}`} href="/pricing">Тарифы</a>
-          <a className={styles.navLink} href="#faq">FAQ</a>
+          <a className={styles.navLink} href="/faq">FAQ</a>
         </div>
         <div className={styles.navBtns}>
           <button className={styles.btnOutline} onClick={() => router.push("/auth")}>Войти</button>
@@ -208,17 +192,6 @@ export default function PricingPage() {
             <div className={styles.compareCell}><CheckIcon /></div>
           </div>
         </div>
-      </div>
-
-      {/* FAQ */}
-      <div className={styles.faqWrap} id="faq">
-        <div className={styles.sectionLabel}>Частые вопросы</div>
-        {FAQ.map((item) => (
-          <div className={styles.faqItem} key={item.q}>
-            <div className={styles.faqQ}>{item.q}</div>
-            <div className={styles.faqA}>{item.a}</div>
-          </div>
-        ))}
       </div>
     </div>
   );
