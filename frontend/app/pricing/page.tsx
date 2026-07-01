@@ -59,7 +59,7 @@ export default function PricingPage() {
     <div className={styles.root}>
       <nav className={styles.nav}>
         <a className={styles.navLogo} href="/">
-          <BrandMark height={30} />
+          <BrandMark height={38} />
         </a>
         <div className={styles.navLinks}>
           <a className={`${styles.navLink} ${styles.navLinkActive}`} href="/pricing">Тарифы</a>

@@ -14,7 +14,7 @@ export default function LandingPage() {
       <div className={styles.page}>
         <nav className={styles.nav}>
           <a className={styles.navLogo} href="/">
-            <BrandMark height={30} />
+            <BrandMark height={38} />
           </a>
           <div className={styles.navLinks}>
             <a className={styles.navLink} href="/pricing">Тарифы</a>
@@ -118,7 +118,7 @@ export default function LandingPage() {
                     {[
                       { chip: "✓", name: "Москва — Юг", sku: "82 SKU", tag: "Выбран", tagBg: "rgba(79,142,247,0.12)", tagColor: "var(--accent-light)", chipBg: "rgba(79,142,247,0.15)" },
                       { chip: "✓", name: "СПб — Осиновая", sku: "44 SKU", tag: "Выбран", tagBg: "rgba(79,142,247,0.12)", tagColor: "var(--accent-light)", chipBg: "rgba(79,142,247,0.15)" },
-                      { chip: "○", name: "Казань", sku: "38 SKU", tag: "Idle", tagBg: "rgba(255,255,255,0.05)", tagColor: "var(--text-muted)", chipBg: "rgba(255,255,255,0.05)", dim: true },
+                      { chip: "○", name: "Казань", sku: "38 SKU", tag: "Не выбран", tagBg: "rgba(255,255,255,0.05)", tagColor: "var(--text-muted)", chipBg: "rgba(255,255,255,0.05)", dim: true },
                       { chip: "!", name: "Екатеринбург", sku: "3 ошибки", tag: "Ошибка", tagBg: "rgba(239,68,68,0.1)", tagColor: "#EF4444", chipBg: "rgba(239,68,68,0.1)", dim: true },
                     ].map((row) => (
                       <div className={styles.mockTableRow} key={row.name}>

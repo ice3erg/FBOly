@@ -65,7 +65,7 @@ export function Sidebar() {
       <div className={styles.sidebarRailSpace} aria-hidden="true" />
       <aside className={styles.sidebar}>
         <Link className={styles.sidebarLogo} href="/" aria-label="FBOly — на главную">
-          <BrandMark height={22} />
+          <BrandMark height={30} />
         </Link>
 
         <nav className={styles.sidebarNav}>

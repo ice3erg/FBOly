@@ -166,7 +166,10 @@ export default function SupplyPage() {
       const nextSelected = isRemoving ? selectedWarehouses.filter((w) => w !== warehouse) : [...selectedWarehouses, warehouse];
       setSelectedWarehouses(nextSelected);
 
-      if (isRemoving && nextSelected.length > 0) {
+      // Пересчитываем распределение количеств и при снятии, и при возврате
+      // галочки — раньше перераспределение вызывалось только при снятии,
+      // из-за чего при возврате кластера в выбор его доля не восстанавливалась.
+      if (nextSelected.length > 0) {
         setIsRedistributing(true);
         try {
           const excluded = createableCandidates.map((c) => c.warehouse).filter((w) => !nextSelected.includes(w));
@@ -233,7 +236,7 @@ export default function SupplyPage() {
 
   const selectedCandidates = createableCandidates.filter((c) => selectedWarehouses.includes(c.warehouse));
   const selectedQuantity = selectedCandidates.reduce((sum, c) => sum + Number(c.total_quantity || 0), 0);
-  const selectedHasCrossdock = selectedCandidates.some((c) => (clusterModes[c.warehouse] ?? "direct") === "crossdock");
+  const selectedHasCrossdock = selectedCandidates.some((c) => (clusterModes[c.warehouse] ?? "crossdock") === "crossdock");
   const canCreateDrafts =
     Boolean(selectedCandidates.length) && !isCreatingDrafts && !isRedistributing && (!selectedHasCrossdock || Boolean(dropOffPointId.trim()));
 
@@ -264,7 +267,7 @@ export default function SupplyPage() {
     if (!approved) return;
 
     const candidatesForCreate = selectedCandidates.map((c) => {
-      const mode = clusterModes[c.warehouse] ?? "direct";
+      const mode = clusterModes[c.warehouse] ?? "crossdock";
       return {
         ...c,
         supply_mode: mode,
@@ -469,7 +472,7 @@ export default function SupplyPage() {
               <div className={styles.clusterList} role="group" aria-label="Список кластеров">
                 {createableCandidates.map((c) => {
                   const selected = selectedWarehouses.includes(c.warehouse);
-                  const mode = clusterModes[c.warehouse] ?? "direct";
+                  const mode = clusterModes[c.warehouse] ?? "crossdock";
                   return (
                     <div
                       key={c.warehouse}
@@ -481,7 +484,9 @@ export default function SupplyPage() {
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleWarehouse(c.warehouse); } }}
                     >
                       <div className={styles.clusterCheck}>
-                        <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-7" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
+                        {selected && (
+                          <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-7" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
+                        )}
                       </div>
                       <div className={styles.clusterInfo}>
                         <div className={styles.clusterName}>{c.warehouse}</div>
@@ -518,7 +523,7 @@ export default function SupplyPage() {
                           Кроссдок
                         </button>
                       </div>
-                      <span className={`${styles.clusterTag} ${selected ? styles.clusterTagSelected : styles.clusterTagUnselected}`}>{selected ? "Выбран" : "Idle"}</span>
+                      <span className={`${styles.clusterTag} ${selected ? styles.clusterTagSelected : styles.clusterTagUnselected}`}>{selected ? "Выбран" : "Не выбран"}</span>
                       {c.draft_id && <span className={styles.clusterTag} style={{ background: "var(--success-dim)", color: "var(--success)", border: "1px solid rgba(34,197,94,0.25)" }}>Черновик создан</span>}
                     </div>
                   );
