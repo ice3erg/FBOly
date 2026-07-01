@@ -48,6 +48,7 @@ export default function PricingPage() {
         <div className={styles.navLinks}>
           <a className={`${styles.navLink} ${styles.navLinkActive}`} href="/pricing">Тарифы</a>
           <a className={styles.navLink} href="/faq">FAQ</a>
+          <a className={styles.navLink} href="/docs">Документация</a>
         </div>
         <div className={styles.navBtns}>
           <button className={styles.btnOutline} onClick={() => router.push("/auth")}>Войти</button>

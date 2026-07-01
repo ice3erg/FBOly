@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_URL } from "@/lib/api";
+import { BrandMark } from "../BrandMark";
 import styles from "./auth.module.css";
 
 const AUTH_STORAGE_KEY = "fboly-auth-session";
@@ -147,8 +148,7 @@ export default function AuthPage() {
   return (
     <div className={styles.page}>
       <a className={styles.brand} href="/">
-        <div className={styles.brandMark}>FB</div>
-        <div className={styles.brandText}>FBOly</div>
+        <BrandMark height={30} />
       </a>
 
       <div className={styles.card}>
