@@ -20,12 +20,42 @@
   --border-hover: rgba(255, 255, 255, 0.16);
   --text: #EAEAF0;
   --text-sec: #9898AA;
-  --text-muted: #55556A;
+  /* text-muted подтянут с #55556A (2.77:1 — проваливал WCAG AA) до значения
+     с контрастом ~4.3:1 на фоне #07070E, чтобы функциональные подписи
+     (SKU, метаданные) реально читались. Для чисто декоративного текста
+     есть --text-faint. */
+  --text-muted: #7A7A90;
+  --text-faint: #55556A;
   --success: #22C55E;
   --success-dim: rgba(34, 197, 94, 0.14);
   --warning: #F59E0B;
   --error: #EF4444;
   --error-dim: rgba(239, 68, 68, 0.12);
+
+  /* Затемнённый вариант акцента для случаев, где на синем лежит белый
+     текст мелким/не-жирным начертанием: #4F8EF7 давал белому лишь 3.21:1.
+     Крупные жирные кнопки могут оставаться на --accent (проходят 3:1). */
+  --accent-strong: #3B7DE0;
+
+  /* ── Шкала отступов (4-based) — единый источник вместо ad-hoc значений ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* ── Шкала скруглений ── */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 100px;
+
+  /* ── Шкала высот интерактивных элементов ── */
+  --control-sm: 36px;
+  --control-md: 40px;
+  --control-lg: 46px;
 
   --font-ui: 'Golos Text', system-ui, sans-serif;
   --font-display: 'Unbounded', sans-serif;
@@ -81,5 +111,25 @@
   input {
     letter-spacing: 0;
     font-family: var(--font-ui);
+  }
+
+  /* Единое видимое кольцо фокуса для клавиатурной навигации на всех
+     страницах. :focus-visible срабатывает только при навигации с
+     клавиатуры (не при клике мышью), поэтому не мешает мышиным
+     пользователям, но делает интерфейс проходимым с Tab. Раньше
+     focus-стили были лишь на части страниц. */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  [role="button"]:focus-visible,
+  [role="checkbox"]:focus-visible,
+  [role="radio"]:focus-visible,
+  [role="tab"]:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 6px;
   }
 }

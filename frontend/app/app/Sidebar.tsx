@@ -98,6 +98,29 @@ export function Sidebar() {
           <div className={dotClass} aria-hidden="true" title="Статус подключения магазина" />
         </Link>
       </aside>
+
+      {/* Мобильная навигация: сайдбар скрывается на узких экранах, поэтому
+          дублируем разделы нижним таб-баром — иначе на телефоне терялась
+          вся навигация между Поставкой / Слотами / Профилем. */}
+      <nav className={styles.mobileTabBar} aria-label="Основная навигация">
+        {NAV_ITEMS.map((item) => {
+          const active = pathname === item.href || pathname?.startsWith(item.href + "/");
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`${styles.mobileTab} ${active ? styles.mobileTabActive : ""}`}
+              aria-current={active ? "page" : undefined}
+            >
+              <span className={styles.mobileTabIcon}>
+                {item.icon}
+                {item.badge && <span className={styles.mobileTabDot} aria-hidden="true" />}
+              </span>
+              <span className={styles.mobileTabLabel}>{item.label}</span>
+            </Link>
+          );
+        })}
+      </nav>
     </>
   );
 }

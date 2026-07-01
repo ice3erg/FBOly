@@ -77,7 +77,7 @@
 .clusterRow:hover:not(.clusterRowDisabled) { border-color: var(--border-hover); background: var(--elevated); }
 .clusterRowSelected { background: var(--accent-dim); border-color: var(--accent-border); }
 .clusterRowDisabled { background: var(--error-dim); border-color: rgba(239, 68, 68, 0.18); opacity: 0.6; cursor: not-allowed; }
-.clusterCheck { width: 20px; height: 20px; border-radius: 6px; border: 1px solid var(--border-hover); background: transparent; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: background 150ms, border-color 150ms, transform 150ms cubic-bezier(.34, 1.56, .64, 1); }
+.clusterCheck { width: 24px; height: 24px; border-radius: 7px; border: 1px solid var(--border-hover); background: transparent; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: background 150ms, border-color 150ms, transform 150ms cubic-bezier(.34, 1.56, .64, 1); }
 .clusterRowSelected .clusterCheck { background: var(--accent); border-color: var(--accent); transform: scale(1.05); }
 .clusterRowDisabled .clusterCheck { border-color: rgba(239, 68, 68, 0.3); }
 .clusterInfo { flex: 1; min-width: 140px; }
@@ -95,8 +95,8 @@
 .clusterTagError { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: var(--error); }
 
 /* Мини-переключатель режима "Прямая / Кроссдок" внутри строки кластера */
-.clusterModeToggle { display: flex; gap: 2px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border); border-radius: 8px; padding: 2px; flex-shrink: 0; }
-.clusterModeBtn { height: 26px; padding: 0 10px; border: none; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 11px; font-weight: 600; font-family: var(--font-ui); cursor: pointer; transition: background 140ms, color 140ms; white-space: nowrap; }
+.clusterModeToggle { display: flex; gap: 2px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border); border-radius: 8px; padding: 3px; flex-shrink: 0; }
+.clusterModeBtn { height: 32px; padding: 0 12px; border: none; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 11px; font-weight: 600; font-family: var(--font-ui); cursor: pointer; transition: background 140ms, color 140ms; white-space: nowrap; }
 .clusterModeBtn:hover { color: var(--text-sec); }
 .clusterModeBtnActive { background: var(--accent); color: #fff; }
 .clusterModeBtnActive:hover { color: #fff; }
