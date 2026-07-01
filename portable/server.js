@@ -813,8 +813,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Ozon FBO Excel portable service: http://localhost:${PORT}`);
+server.on("error", (error) => {
+  console.error("Fatal server error on startup:", error);
+  process.exit(1);
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Ozon FBO Excel portable service listening on 0.0.0.0:${PORT}`);
 });
 
 function serveFrontendAsset(res, requestPathname) {
