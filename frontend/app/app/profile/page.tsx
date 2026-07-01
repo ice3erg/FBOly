@@ -259,19 +259,19 @@ export default function ProfilePage() {
             <div className={`${styles.planCard} ${styles.planCardCurrent}`}>
               <div className={styles.planCurrentTag}>Текущий</div>
               <div className={styles.planName}>Pro</div>
-              <div className={styles.planPrice}>1 490 ₽</div>
+              <div className={styles.planPrice}>1 990 ₽</div>
               <div className={styles.planFoot}>Безлимит · приоритет слотов</div>
             </div>
             <div className={styles.planCard}>
               <div className={styles.planName}>Команда</div>
-              <div className={styles.planPrice}>3 990 ₽</div>
+              <div className={styles.planPrice}>4 990 ₽</div>
               <div className={styles.planFoot}>До 5 пользователей</div>
             </div>
           </div>
           <div className={styles.billingRow}>
             <div>
               <div className={styles.billingTitle}>Следующее списание</div>
-              <div className={styles.billingDate}>15 июля 2026 · 1 490 ₽</div>
+              <div className={styles.billingDate}>15 июля 2026 · 1 990 ₽</div>
             </div>
             <div className={styles.billingActions}>
               <button className={styles.btnGhost} style={{ height: 32, padding: "0 12px", fontSize: 12 }} onClick={() => setToast("Смена тарифа скоро появится")}>Сменить тариф</button>
