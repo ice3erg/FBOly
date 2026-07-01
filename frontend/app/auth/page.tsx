@@ -1,38 +1,25 @@
 "use client";
 
-import { useState, useEffect, FormEvent } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  ArrowRight,
-  CheckCircle2,
-  Eye,
-  EyeOff,
-  Loader2,
-  LockKeyhole,
-  ShieldCheck,
-  Sparkles,
-  UserPlus,
-  Zap,
-} from "lucide-react";
+import styles from "./auth.module.css";
 
 const AUTH_STORAGE_KEY = "fboly-auth-session";
 
 type AuthMode = "login" | "register";
 
-type FieldError = {
+type FieldErrors = {
   name?: string;
   email?: string;
   password?: string;
   confirm?: string;
 };
 
-function validate(mode: AuthMode, fields: {
-  name: string;
-  email: string;
-  password: string;
-  confirm: string;
-}): FieldError {
-  const errors: FieldError = {};
+function validate(
+  mode: AuthMode,
+  fields: { name: string; email: string; password: string; confirm: string },
+): FieldErrors {
+  const errors: FieldErrors = {};
   if (mode === "register" && !fields.name.trim()) {
     errors.name = "Введите имя";
   }
@@ -52,115 +39,47 @@ function validate(mode: AuthMode, fields: {
   return errors;
 }
 
-function LogoMark() {
-  return (
-    <div
-      className="flex items-center justify-center rounded-2xl"
-      style={{
-        width: 52,
-        height: 52,
-        background: "linear-gradient(135deg, #7C3AED 0%, #A855F7 100%)",
-        boxShadow: "0 0 32px rgba(124,58,237,0.55), inset 0 1px 0 rgba(255,255,255,0.18)",
-      }}
-    >
-      <Zap className="h-7 w-7 text-white" strokeWidth={2.2} />
-    </div>
+function EyeIcon({ open }: { open: boolean }) {
+  return open ? (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.24 4.24M9.5 5.1A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7a13.2 13.2 0 0 1-3.1 3.6M6.2 6.2A13.4 13.4 0 0 0 1 12s4 7 11 7a10.8 10.8 0 0 0 4.2-.85" />
+    </svg>
+  ) : (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
   );
 }
-
-function FieldWrapper({
-  label,
-  error,
-  children,
-}: {
-  label: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-zinc-300">{label}</label>
-      {children}
-      {error && (
-        <p className="text-xs text-red-400">{error}</p>
-      )}
-    </div>
-  );
-}
-
-function AuthInput({
-  type = "text",
-  placeholder,
-  value,
-  onChange,
-  autoComplete,
-  hasError,
-  suffix,
-}: {
-  type?: string;
-  placeholder?: string;
-  value: string;
-  onChange: (v: string) => void;
-  autoComplete?: string;
-  hasError?: boolean;
-  suffix?: React.ReactNode;
-}) {
-  return (
-    <div className="relative">
-      <input
-        type={type}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        autoComplete={autoComplete}
-        className={[
-          "w-full rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-500 outline-none transition",
-          "h-12",
-          hasError
-            ? "border border-red-500/60 bg-red-500/[0.06]"
-            : "border border-white/[0.09] bg-white/[0.05] focus:border-violet-500/60 focus:bg-white/[0.07]",
-          suffix ? "pr-12" : "",
-        ].join(" ")}
-      />
-      {suffix && (
-        <div className="absolute inset-y-0 right-0 flex items-center pr-4">
-          {suffix}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const FEATURES = [
-  "Автоматическое распределение товаров по кластерам Ozon",
-  "Создание черновиков поставки через Seller API",
-  "Охотник на слоты — найдёт окно и забронирует сам",
-];
 
 export default function AuthPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<AuthMode>("register");
+  const [mode, setMode] = useState<AuthMode>("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [shop, setShop] = useState("");
+  const [agreed, setAgreed] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [agreed, setAgreed] = useState(true);
-  const [errors, setErrors] = useState<FieldError>({});
-  const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<FieldErrors>({});
   const [globalError, setGlobalError] = useState("");
+  const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [shakeField, setShakeField] = useState<string | null>(null);
+
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setMounted(true);
-    // Если уже авторизован — редиректим на главную
     try {
       const session = localStorage.getItem(AUTH_STORAGE_KEY);
-      if (session) {
-        router.replace("/");
-      }
-    } catch {}
+      if (session) router.replace("/app/supply");
+    } catch {
+      // localStorage недоступен — остаёмся на форме входа
+    }
   }, [router]);
 
   function switchMode(next: AuthMode) {
@@ -170,7 +89,6 @@ export default function AuthPage() {
     setPassword("");
     setConfirm("");
     setShowPassword(false);
-    setShowConfirm(false);
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -180,6 +98,10 @@ export default function AuthPage() {
     const fieldErrors = validate(mode, { name, email, password, confirm });
     if (Object.keys(fieldErrors).length > 0) {
       setErrors(fieldErrors);
+      const firstBad = fieldErrors.name ? "name" : fieldErrors.email ? "email" : "password";
+      setShakeField(firstBad);
+      setTimeout(() => setShakeField(null), 400);
+      (firstBad === "name" ? nameRef : firstBad === "email" ? emailRef : passwordRef).current?.focus();
       return;
     }
     if (mode === "register" && !agreed) {
@@ -190,8 +112,9 @@ export default function AuthPage() {
     setErrors({});
     setLoading(true);
 
-    // Имитируем запрос — здесь будет реальный API
-    await new Promise((r) => setTimeout(r, 800));
+    // Точка интеграции с бэкендом: POST /api/auth/login или /api/auth/register.
+    // Пока бэкенд их не реализует — мок-сессия в localStorage, как и было.
+    await new Promise((r) => setTimeout(r, 600));
 
     try {
       localStorage.setItem(
@@ -199,317 +122,195 @@ export default function AuthPage() {
         JSON.stringify({
           email: email.trim(),
           name: name.trim() || email.split("@")[0],
+          shop: shop.trim() || null,
           createdAt: new Date().toISOString(),
         }),
       );
-      router.push("/");
+      router.push("/app/supply");
     } catch {
       setGlobalError("Не удалось сохранить сессию. Попробуйте ещё раз.");
-    } finally {
       setLoading(false);
     }
   }
 
   if (!mounted) return null;
 
+  const isLogin = mode === "login";
+
   return (
-    <main
-      className="min-h-screen text-white"
-      style={{
-        background:
-          "radial-gradient(circle at 10% 90%, rgba(124,58,237,0.28) 0%, transparent 38rem)," +
-          "radial-gradient(circle at 85% 8%, rgba(139,92,246,0.18) 0%, transparent 32rem)," +
-          "linear-gradient(rgba(255,255,255,0.016) 1px, transparent 1px)," +
-          "linear-gradient(90deg, rgba(255,255,255,0.016) 1px, transparent 1px)," +
-          "linear-gradient(180deg, #07070a 0%, #0b0b12 50%, #050507 100%)",
-        backgroundSize: "auto, auto, 34px 34px, 34px 34px, auto",
-      }}
-    >
-      {/* Header */}
-      <header className="mx-auto flex max-w-[1400px] items-center justify-between px-6 py-5">
-        <div className="flex items-center gap-3">
-          <LogoMark />
-          <span className="text-2xl font-semibold tracking-tight">
-            FBO<span className="text-violet-400">ly</span>
-          </span>
+    <div className={styles.page}>
+      <a className={styles.brand} href="/">
+        <div className={styles.brandMark}>FB</div>
+        <div className={styles.brandText}>FBOly</div>
+      </a>
+
+      <div className={styles.card}>
+        <div className={styles.accentLine} />
+
+        <div className={styles.title}>{isLogin ? "Добро пожаловать" : "Создать аккаунт"}</div>
+        <div className={styles.subtitle}>
+          {isLogin ? "Войдите в свой аккаунт FBOly" : "Начните автоматизировать поставки"}
         </div>
-        <a
-          href="/"
-          className="group flex items-center gap-2 rounded-lg border border-white/[0.09] bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-300 transition hover:border-violet-500/40 hover:bg-violet-500/10 hover:text-white"
-        >
-          Войти в кабинет
-          <ArrowRight className="h-4 w-4 text-violet-400 transition group-hover:translate-x-0.5" />
-        </a>
-      </header>
 
-      {/* Body */}
-      <div className="mx-auto grid max-w-[1400px] min-h-[calc(100vh-76px)] items-center gap-10 px-6 py-10 lg:grid-cols-2 lg:gap-16 lg:py-0">
-
-        {/* Left — promo */}
-        <section className="hidden lg:block">
-          <div className="max-w-[520px]">
-            <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-violet-500/25 bg-violet-500/10 px-4 py-2 text-sm font-semibold text-violet-300">
-              <Sparkles className="h-4 w-4" />
-              Закрываем боли селлеров
-            </div>
-
-            <h1 className="text-5xl font-semibold leading-[1.06] tracking-tight xl:text-6xl">
-              Поставки Ozon FBO{" "}
-              <span
-                className="bg-clip-text text-transparent"
-                style={{
-                  backgroundImage: "linear-gradient(135deg, #A78BFA 0%, #7C3AED 60%)",
-                }}
-              >
-                без рутины
-              </span>
-            </h1>
-
-            <p className="mt-6 text-lg leading-8 text-zinc-400">
-              FBOly распределяет товары по кластерам, готовит файлы и ловит слоты — вам остаётся только подтвердить.
-            </p>
-
-            <ul className="mt-10 space-y-5">
-              {FEATURES.map((feat) => (
-                <li key={feat} className="flex items-start gap-4">
-                  <div
-                    className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full"
-                    style={{
-                      background: "rgba(124,58,237,0.18)",
-                      border: "1px solid rgba(124,58,237,0.35)",
-                      boxShadow: "0 0 16px rgba(124,58,237,0.18)",
-                    }}
-                  >
-                    <CheckCircle2 className="h-4 w-4 text-violet-400" />
-                  </div>
-                  <span className="text-base text-zinc-200">{feat}</span>
-                </li>
-              ))}
-            </ul>
-
-            <div className="mt-12 flex items-center gap-3 text-sm text-zinc-500">
-              <ShieldCheck className="h-4 w-4 text-violet-500" />
-              Ключи Ozon вводятся только внутри кабинета и нигде не хранятся на сервере
-            </div>
-          </div>
-        </section>
-
-        {/* Right — auth card */}
-        <section className="mx-auto w-full max-w-[460px] lg:mx-0">
-          {/* Mode switcher */}
+        <div className={styles.tabSwitcher} role="tablist">
           <div
-            className="mb-7 flex rounded-xl p-1"
-            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
+            className={styles.tabIndicator}
+            style={{ transform: isLogin ? "translateX(0)" : "translateX(calc(100% + 3px))" }}
+          />
+          <button
+            type="button"
+            className={`${styles.tabBtn} ${isLogin ? styles.tabActive : styles.tabInactive}`}
+            role="tab"
+            aria-selected={isLogin}
+            onClick={() => switchMode("login")}
           >
-            {(["register", "login"] as AuthMode[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => switchMode(m)}
-                className={[
-                  "flex-1 rounded-lg py-2.5 text-sm font-semibold transition",
-                  mode === m
-                    ? "bg-violet-600 text-white shadow-[0_2px_16px_rgba(124,58,237,0.40)]"
-                    : "text-zinc-400 hover:text-zinc-200",
-                ].join(" ")}
-              >
-                {m === "register" ? "Регистрация" : "Вход"}
-              </button>
-            ))}
-          </div>
+            Вход
+          </button>
+          <button
+            type="button"
+            className={`${styles.tabBtn} ${!isLogin ? styles.tabActive : styles.tabInactive}`}
+            role="tab"
+            aria-selected={!isLogin}
+            onClick={() => switchMode("register")}
+          >
+            Регистрация
+          </button>
+        </div>
 
-          {/* Card */}
-          <div
-            className="rounded-2xl p-7 sm:p-8"
-            style={{
-              background: "rgba(11,11,20,0.85)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              boxShadow:
-                "0 0 0 1px rgba(124,58,237,0.12), 0 24px 60px rgba(0,0,0,0.55), 0 0 80px rgba(124,58,237,0.10)",
-              backdropFilter: "blur(20px)",
-            }}
-          >
-            {/* Top line accent */}
-            <div
-              className="pointer-events-none absolute inset-x-7 top-0 h-px"
-              style={{
-                background: "linear-gradient(90deg, transparent, rgba(139,92,246,0.6), transparent)",
-              }}
+        <form className={styles.formFields} onSubmit={handleSubmit} noValidate>
+          <div className={`${styles.field} ${isLogin ? styles.hidden : ""} ${shakeField === "name" ? styles.shake : ""}`}>
+            <label className={styles.label} htmlFor="inputName">Имя</label>
+            <input
+              ref={nameRef}
+              className={`${styles.input} ${errors.name ? styles.invalid : ""}`}
+              type="text"
+              placeholder="Алексей Иванов"
+              id="inputName"
+              autoComplete="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
             />
+            {errors.name && <div className={styles.fieldError}>{errors.name}</div>}
+          </div>
 
-            <div className="mb-6 flex items-center gap-4">
-              <LogoMark />
-              <div>
-                <h2 className="text-xl font-semibold">
-                  {mode === "register" ? "Создать аккаунт" : "С возвращением"}
-                </h2>
-                <p className="mt-0.5 text-sm text-zinc-500">
-                  {mode === "register"
-                    ? "Начните автоматизировать поставки"
-                    : "Войдите в личный кабинет"}
-                </p>
-              </div>
-            </div>
+          <div className={shakeField === "email" ? styles.shake : ""}>
+            <label className={styles.label} htmlFor="inputEmail">Email</label>
+            <input
+              ref={emailRef}
+              className={`${styles.input} ${errors.email ? styles.invalid : ""}`}
+              type="email"
+              placeholder="seller@example.ru"
+              id="inputEmail"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            {errors.email && <div className={styles.fieldError}>{errors.email}</div>}
+          </div>
 
-            {globalError && (
-              <div className="mb-5 rounded-xl border border-red-500/30 bg-red-500/[0.08] px-4 py-3 text-sm text-red-400">
-                {globalError}
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} noValidate className="space-y-4">
-              {mode === "register" && (
-                <FieldWrapper label="Имя" error={errors.name}>
-                  <AuthInput
-                    placeholder="Как вас зовут?"
-                    value={name}
-                    onChange={(v) => { setName(v); setErrors((e) => ({ ...e, name: undefined })); }}
-                    autoComplete="name"
-                    hasError={!!errors.name}
-                  />
-                </FieldWrapper>
-              )}
-
-              <FieldWrapper label="Email" error={errors.email}>
-                <AuthInput
-                  type="email"
-                  placeholder="seller@example.ru"
-                  value={email}
-                  onChange={(v) => { setEmail(v); setErrors((e) => ({ ...e, email: undefined })); }}
-                  autoComplete="email"
-                  hasError={!!errors.email}
-                />
-              </FieldWrapper>
-
-              <FieldWrapper label="Пароль" error={errors.password}>
-                <AuthInput
-                  type={showPassword ? "text" : "password"}
-                  placeholder={mode === "register" ? "Минимум 6 символов" : "Введите пароль"}
-                  value={password}
-                  onChange={(v) => { setPassword(v); setErrors((e) => ({ ...e, password: undefined })); }}
-                  autoComplete={mode === "register" ? "new-password" : "current-password"}
-                  hasError={!!errors.password}
-                  suffix={
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword((s) => !s)}
-                      className="text-zinc-500 transition hover:text-zinc-300"
-                      tabIndex={-1}
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  }
-                />
-              </FieldWrapper>
-
-              {mode === "register" && (
-                <FieldWrapper label="Повторите пароль" error={errors.confirm}>
-                  <AuthInput
-                    type={showConfirm ? "text" : "password"}
-                    placeholder="Ещё раз"
-                    value={confirm}
-                    onChange={(v) => { setConfirm(v); setErrors((e) => ({ ...e, confirm: undefined })); }}
-                    autoComplete="new-password"
-                    hasError={!!errors.confirm}
-                    suffix={
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirm((s) => !s)}
-                        className="text-zinc-500 transition hover:text-zinc-300"
-                        tabIndex={-1}
-                      >
-                        {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </button>
-                    }
-                  />
-                </FieldWrapper>
-              )}
-
-              {mode === "login" && (
-                <div className="flex justify-end">
-                  <button type="button" className="text-sm text-violet-400 transition hover:text-violet-300">
-                    Забыли пароль?
-                  </button>
-                </div>
-              )}
-
-              {mode === "register" && (
-                <label className="flex cursor-pointer items-start gap-3 pt-1 text-sm text-zinc-400">
-                  <input
-                    type="checkbox"
-                    checked={agreed}
-                    onChange={(e) => setAgreed(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 rounded border-white/20 accent-violet-500"
-                  />
-                  <span>
-                    Согласен с{" "}
-                    <span className="text-violet-400 transition hover:text-violet-300 cursor-pointer">
-                      условиями сервиса
-                    </span>{" "}
-                    и{" "}
-                    <span className="text-violet-400 transition hover:text-violet-300 cursor-pointer">
-                      политикой конфиденциальности
-                    </span>
-                  </span>
-                </label>
-              )}
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="relative mt-2 flex h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-xl text-sm font-semibold text-white transition disabled:opacity-70"
-                style={{
-                  background: loading
-                    ? "rgba(124,58,237,0.6)"
-                    : "linear-gradient(135deg, #7C3AED 0%, #9333EA 100%)",
-                  boxShadow: loading ? "none" : "0 4px 24px rgba(124,58,237,0.45)",
-                }}
-              >
-                {loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : mode === "register" ? (
-                  <UserPlus className="h-4 w-4" />
-                ) : (
-                  <LockKeyhole className="h-4 w-4" />
-                )}
-                {loading
-                  ? "Подождите..."
-                  : mode === "register"
-                    ? "Создать аккаунт"
-                    : "Войти в кабинет"}
-              </button>
-            </form>
-
-            <p className="mt-5 text-center text-sm text-zinc-500">
-              {mode === "register" ? "Уже есть аккаунт?" : "Ещё нет аккаунта?"}{" "}
+          <div className={shakeField === "password" ? styles.shake : ""}>
+            <label className={styles.label} htmlFor="inputPassword">
+              Пароль
               <button
                 type="button"
-                onClick={() => switchMode(mode === "register" ? "login" : "register")}
-                className="font-medium text-violet-400 transition hover:text-violet-300"
+                className={styles.link}
+                disabled={!isLogin}
+                onClick={() => alert("Ссылка для восстановления пароля будет отправлена на email.")}
               >
-                {mode === "register" ? "Войти" : "Зарегистрироваться"}
+                Забыли пароль?
               </button>
-            </p>
-
-            <div className="mt-6 flex items-center gap-2 justify-center text-xs text-zinc-600">
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Ключи Ozon API хранятся только в вашем браузере
+            </label>
+            <div className={styles.passwordWrap}>
+              <input
+                ref={passwordRef}
+                className={`${styles.input} ${errors.password ? styles.invalid : ""}`}
+                type={showPassword ? "text" : "password"}
+                placeholder="••••••••"
+                id="inputPassword"
+                autoComplete={isLogin ? "current-password" : "new-password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                type="button"
+                className={styles.passwordToggle}
+                aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"}
+                aria-pressed={showPassword}
+                onClick={() => setShowPassword((s) => !s)}
+              >
+                <EyeIcon open={showPassword} />
+              </button>
             </div>
+            {errors.password && <div className={styles.fieldError}>{errors.password}</div>}
           </div>
 
-          {/* Social proof */}
-          <div className="mt-6 flex items-center justify-center gap-6 text-xs text-zinc-600">
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
-              Сервис работает
-            </span>
-            <span>·</span>
-            <span>Бесплатный доступ на старте</span>
-            <span>·</span>
-            <span>Без карты</span>
+          <div className={`${styles.field} ${isLogin ? styles.hidden : ""}`}>
+            <label className={styles.label} htmlFor="inputConfirm">Повторите пароль</label>
+            <input
+              className={`${styles.input} ${errors.confirm ? styles.invalid : ""}`}
+              type={showPassword ? "text" : "password"}
+              placeholder="••••••••"
+              id="inputConfirm"
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+            />
+            {errors.confirm && <div className={styles.fieldError}>{errors.confirm}</div>}
           </div>
-        </section>
+
+          <div className={`${styles.field} ${isLogin ? styles.hidden : ""}`}>
+            <label className={styles.label} htmlFor="inputShop">Магазин на Ozon (опционально)</label>
+            <input
+              className={styles.input}
+              type="text"
+              placeholder="Название магазина или Client-Id"
+              id="inputShop"
+              autoComplete="organization"
+              value={shop}
+              onChange={(e) => setShop(e.target.value)}
+            />
+          </div>
+
+          {!isLogin && (
+            <div className={styles.agreeRow}>
+              <input
+                type="checkbox"
+                id="agree"
+                checked={agreed}
+                onChange={(e) => setAgreed(e.target.checked)}
+              />
+              <label htmlFor="agree">
+                Согласен с условиями сервиса и политикой обработки данных
+              </label>
+            </div>
+          )}
+
+          {globalError && <div className={`${styles.errorMsg} ${styles.show}`}>{globalError}</div>}
+
+          <button className={styles.btnSubmit} type="submit" disabled={loading}>
+            {loading ? (
+              <>
+                <svg className={styles.spin} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+                  <circle cx="12" cy="12" r="9" strokeOpacity="0.25" />
+                  <path d="M21 12a9 9 0 0 0-9-9" strokeLinecap="round" />
+                </svg>
+                Загрузка…
+              </>
+            ) : isLogin ? "Войти" : "Зарегистрироваться"}
+          </button>
+        </form>
+
+        <div className={styles.toggleRow}>
+          <button type="button" className={styles.link} onClick={() => switchMode(isLogin ? "register" : "login")}>
+            {isLogin ? "Нет аккаунта? Зарегистрироваться" : "Уже есть аккаунт? Войти"}
+          </button>
+        </div>
+
+        <div className={styles.footer}>
+          <span className={styles.footerDot}><span className={styles.footerInner} /></span>
+          Соединение защищено
+        </div>
       </div>
-    </main>
+    </div>
   );
 }

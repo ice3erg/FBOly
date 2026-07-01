@@ -2,48 +2,73 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  :root {
-    --background: 240 18% 3%;
-    --foreground: 0 0% 100%;
-    --card: 240 15% 8%;
-    --card-foreground: 0 0% 100%;
-    --primary: 262 83% 58%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 271 91% 65%;
-    --secondary-foreground: 0 0% 100%;
-    --muted: 240 9% 12%;
-    --muted-foreground: 240 5% 65%;
-    --accent: 280 95% 58%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 0 0% 100% / 0.08;
-    --input: 0 0% 100% / 0.10;
-    --ring: 262 83% 58%;
-    --radius: 8px;
-  }
+/*
+  Единый источник дизайн-токенов FBOly (dark-tech, синий акцент).
+  Используется и Tailwind-слоем (через hsl-обёртки ниже, для старых
+  shadcn-компонентов), и «сырым» CSS страниц/модулей нового дизайна
+  напрямую через var(--accent) и т.д. — см. f-icon-handoff.md.
+*/
+:root {
+  --bg: #07070E;
+  --accent: #4F8EF7;
+  --accent-light: #6BA3FF;
+  --accent-dim: rgba(79, 142, 247, 0.14);
+  --accent-border: rgba(79, 142, 247, 0.28);
+  --surface: #0E0E1A;
+  --elevated: #13131F;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-hover: rgba(255, 255, 255, 0.16);
+  --text: #EAEAF0;
+  --text-sec: #9898AA;
+  --text-muted: #55556A;
+  --success: #22C55E;
+  --success-dim: rgba(34, 197, 94, 0.14);
+  --warning: #F59E0B;
+  --error: #EF4444;
+  --error-dim: rgba(239, 68, 68, 0.12);
 
+  --font-ui: 'Golos Text', system-ui, sans-serif;
+  --font-display: 'Unbounded', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* hsl-обёртки для Tailwind/shadcn (Button, Card, Input, Badge, Alert) */
+  --background: 240 46% 4%;
+  --foreground: 220 27% 92%;
+  --card: 246 30% 9%;
+  --card-foreground: 220 27% 92%;
+  --primary: 217 89% 64%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 246 26% 12%;
+  --secondary-foreground: 220 27% 92%;
+  --muted: 246 20% 12%;
+  --muted-foreground: 240 8% 63%;
+  --accent-hsl: 217 89% 64%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 0 0% 100% / 0.10;
+  --ring: 217 89% 64%;
+  --radius: 10px;
+}
+
+@layer base {
   * {
     @apply border-border;
   }
 
   body {
     @apply bg-background text-foreground antialiased;
+    font-family: var(--font-ui);
     letter-spacing: 0;
     background:
-      radial-gradient(circle at 4% 100%, rgba(124, 58, 237, 0.32), transparent 28rem),
-      radial-gradient(circle at 88% 0%, rgba(139, 92, 246, 0.20), transparent 32rem),
-      linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-      linear-gradient(180deg, #07070a 0%, #0b0b12 48%, #050507 100%);
-    background-size: auto, auto, 34px 34px, 34px 34px, auto;
+      radial-gradient(circle at 20% 0%, rgba(79, 142, 247, 0.06), transparent 40%),
+      var(--bg);
     min-height: 100vh;
   }
 
   ::selection {
-    background: rgba(139, 92, 246, 0.45);
-    color: #ffffff;
+    background: var(--accent-dim);
+    color: var(--text);
   }
 
   input,
@@ -55,5 +80,6 @@
   button,
   input {
     letter-spacing: 0;
+    font-family: var(--font-ui);
   }
 }

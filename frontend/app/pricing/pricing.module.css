@@ -1,0 +1,80 @@
+.root { min-height: 100vh; background: var(--bg); }
+.nav {
+  height: 64px; display: flex; align-items: center; padding: 0 48px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055); position: sticky; top: 0; z-index: 10;
+  background: rgba(8, 8, 15, 0.85); backdrop-filter: blur(12px);
+}
+.navLogo { display: flex; align-items: center; margin-right: auto; text-decoration: none; }
+.navLinks { display: flex; gap: 4px; margin-right: 28px; }
+.navLink { height: 36px; padding: 0 14px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--text-sec); text-decoration: none; display: flex; align-items: center; transition: color 140ms, background 140ms; }
+.navLink:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+.navLinkActive { color: var(--text); }
+.navBtns { display: flex; gap: 8px; }
+.btnOutline { height: 36px; padding: 0 16px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.14); background: transparent; color: var(--text); font-size: 13px; font-weight: 500; font-family: var(--font-ui); cursor: pointer; transition: border-color 140ms; }
+.btnOutline:hover { border-color: rgba(255, 255, 255, 0.28); }
+.btnFilled { height: 36px; padding: 0 16px; border-radius: 8px; background: var(--accent); color: #fff; border: none; font-size: 13px; font-weight: 500; font-family: var(--font-ui); cursor: pointer; transition: background 140ms; }
+.btnFilled:hover { background: var(--accent-light); }
+
+.hero { text-align: center; padding: 72px 24px 56px; }
+.badge { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px; background: var(--accent-dim); border: 1px solid var(--accent-border); border-radius: 100px; font-size: 12px; font-weight: 600; color: var(--accent-light); margin-bottom: 24px; letter-spacing: 0.04em; }
+.h1 { font-family: var(--font-display); font-size: clamp(32px, 4vw, 52px); font-weight: 800; line-height: 1.05; letter-spacing: -0.03em; margin-bottom: 16px; }
+.sub { font-size: 17px; color: var(--text-sec); line-height: 1.7; max-width: 480px; margin: 0 auto 36px; }
+
+.toggleWrap { display: inline-flex; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 100px; padding: 4px 16px 4px 4px; }
+.toggleInner { display: flex; gap: 2px; background: rgba(255, 255, 255, 0.04); border-radius: 100px; padding: 3px; }
+.toggleBtn { height: 30px; padding: 0 16px; border-radius: 100px; border: none; font-size: 13px; font-weight: 500; font-family: var(--font-ui); cursor: pointer; background: transparent; color: var(--text-sec); transition: background 150ms, color 150ms; }
+.toggleBtnActive { background: var(--accent); color: #fff; }
+.savings { font-size: 12px; font-weight: 600; color: var(--success); }
+
+.cardsGrid { max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 860px) { .cardsGrid { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; position: relative; }
+.cardHighlight { border: 2px solid var(--accent-border); }
+.accentLine { position: absolute; top: 0; left: 10%; right: 10%; height: 1px; background: linear-gradient(90deg, transparent, var(--accent), transparent); }
+.popularBadge { position: absolute; top: -1px; right: 20px; height: 22px; padding: 0 10px; background: var(--accent); border-radius: 0 0 8px 8px; font-size: 11px; font-weight: 600; color: #fff; display: flex; align-items: center; letter-spacing: 0.04em; }
+.planName { font-size: 13px; font-weight: 600; color: var(--text-sec); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 16px; }
+.planNameAccent { color: var(--accent-light); }
+.priceRow { display: flex; align-items: baseline; gap: 4px; margin-bottom: 6px; }
+.priceNum { font-family: var(--font-mono); font-size: 40px; font-weight: 700; line-height: 1; }
+.priceCur { font-size: 18px; color: var(--text-sec); }
+.pricePeriod { font-size: 14px; color: var(--text-muted); }
+.priceCaption { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; }
+.planCta { width: 100%; height: 40px; border-radius: 8px; font-size: 14px; font-weight: 500; font-family: var(--font-ui); cursor: pointer; margin-bottom: 28px; transition: border-color 150ms, background 150ms; }
+.planCtaOutline { border: 1px solid rgba(255, 255, 255, 0.14); background: transparent; color: var(--text); }
+.planCtaOutline:hover { border-color: rgba(255, 255, 255, 0.28); background: rgba(255, 255, 255, 0.04); }
+.planCtaFilled { border: none; background: var(--accent); color: #fff; font-weight: 600; }
+.planCtaFilled:hover { background: var(--accent-light); }
+.featuresLabel { font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 14px; }
+.featureRow { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-sec); }
+.featureRowStrong { color: var(--text); }
+.featureList { display: flex; flex-direction: column; gap: 11px; }
+.check { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: rgba(34, 197, 94, 0.15); flex-shrink: 0; }
+.dash { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; color: var(--text-muted); font-size: 14px; }
+
+.compareWrap { max-width: 900px; margin: 0 auto; padding: 0 24px 80px; }
+.sectionLabel { font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 24px; text-align: center; }
+.compareTable { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+.compareHead { display: grid; grid-template-columns: 1fr 100px 100px 100px; padding: 16px 24px; border-bottom: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); }
+.compareHeadCell { text-align: center; font-size: 12px; font-weight: 600; color: var(--text-sec); }
+.compareHeadCellAccent { color: var(--accent-light); }
+.compareRow { display: grid; grid-template-columns: 1fr 100px 100px 100px; padding: 14px 24px; border-bottom: 1px solid var(--border); align-items: center; transition: background 150ms; }
+.compareRow:hover { background: rgba(255, 255, 255, 0.018); }
+.compareRow:last-child { border-bottom: none; }
+.compareFeature { font-size: 13px; color: var(--text-sec); }
+.compareCell { text-align: center; font-size: 13px; }
+.compareCellMono { font-family: var(--font-mono); color: var(--text-sec); }
+.compareCellAccent { font-weight: 600; color: var(--accent-light); }
+.compareCellStrong { font-weight: 600; color: var(--text); }
+.compareCellDash { font-size: 18px; color: var(--text-muted); }
+
+.faqWrap { max-width: 680px; margin: 0 auto; padding: 0 24px 100px; }
+.faqItem { border-top: 1px solid var(--border); padding: 20px 0; }
+.faqItem:last-child { border-bottom: 1px solid var(--border); }
+.faqQ { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+.faqA { font-size: 14px; color: var(--text-sec); line-height: 1.6; }
+
+@media (max-width: 700px) {
+  .nav { padding: 0 20px; }
+  .navLinks { display: none; }
+  .compareHead, .compareRow { grid-template-columns: 1fr 70px 70px 70px; padding-left: 14px; padding-right: 14px; }
+}
